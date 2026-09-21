@@ -44,6 +44,11 @@ export type StatusCounts = Record<TriageStatus, number>;
 export async function listIntakes({ page, pageSize, status }: ListIntakesQuery) {
   const where = status ? { status } : {};
 
+  // Read before the rows, not alongside them. The page hands this to the event stream as its
+  // starting cursor, and a cursor taken after the read would skip anything that landed in
+  // between, leaving a card on "Analysing" with no further event coming for it.
+  const latestEvent = await db.event.findFirst({ orderBy: { seq: 'desc' }, select: { seq: true } });
+
   const [rows, total, grouped] = await Promise.all([
     db.intake.findMany({
       where,
@@ -70,6 +75,7 @@ export async function listIntakes({ page, pageSize, status }: ListIntakesQuery) 
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
     counts,
     totalAll: Object.values(counts).reduce((a, b) => a + b, 0),
+    sinceSeq: latestEvent?.seq ?? 0,
   };
 }
 

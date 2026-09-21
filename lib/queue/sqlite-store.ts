@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
-import { emit } from '../events';
+import { emit, type EventType } from '../events';
 import type {
   ClaimedJob,
   EnrichmentResult,
@@ -16,11 +16,106 @@ class StaleLockError extends Error {}
 const TAIL_INTERVAL_MS = 250;
 const MAX_TAIL_BACKOFF = 5;
 
-const releasedLock = {
+export type TailOptions = {
+  sinceSeq: number;
+  // The SSE route serves one detail page at a time; the worker wants everything.
+  intakeId?: string;
+  // Narrows at the query, so frames the caller would discard are never built or sent.
+  types?: readonly EventType[];
+};
+
+// Outside the store because the stream endpoint needs the same tail, and handing it a job store
+// built with a made-up worker id would misrepresent what the object is.
+export function tailEvents(
+  db: PrismaClient,
+  { sinceSeq, intakeId, types }: TailOptions,
+  { onEvent, onError }: SubscribeHandlers,
+): Subscription {
+  let cursor = sinceSeq;
+  let stopped = false;
+  let consecutiveFailures = 0;
+  let timer: NodeJS.Timeout | undefined;
+
+  const tick = async () => {
+    if (stopped) return;
+
+    try {
+      const rows = await db.event.findMany({
+        where: {
+          seq: { gt: cursor },
+          ...(intakeId ? { intakeId } : {}),
+          ...(types ? { type: { in: [...types] } } : {}),
+        },
+        orderBy: { seq: 'asc' },
+        take: 200,
+      });
+      consecutiveFailures = 0;
+
+      for (const row of rows) {
+        if (stopped) return;
+        cursor = row.seq;
+        onEvent(row as QueueEvent);
+      }
+    } catch (err) {
+      consecutiveFailures += 1;
+      console.error(`[queue] event tail failed ${consecutiveFailures}x`, err);
+      onError?.(err, consecutiveFailures);
+    }
+
+    if (!stopped) {
+      const delay = TAIL_INTERVAL_MS * 2 ** Math.min(consecutiveFailures, MAX_TAIL_BACKOFF);
+      timer = setTimeout(tick, delay);
+    }
+  };
+
+  void tick();
+
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+// Exported so the retry endpoint clears the same fields: "this row holds no lease" is one
+// fact, and a lock field added later has to reach both places.
+export const releasedLock = {
   lockedBy: null,
   lockToken: null,
   leaseExpiresAt: null,
 } as const;
+
+/**
+ * Puts a finished enrichment back on the queue and announces it on the stream.
+ *
+ * Lives here rather than in the route handler because the enrichment row is the job record:
+ * which columns say "claimable" is the queue's business, and the Postgres adapter would have
+ * to change it in step. Returns false when the row is already PENDING or PROCESSING, which is
+ * how an impatient double-click gets turned away.
+ */
+export async function requeueIntake(db: PrismaClient, intakeId: string): Promise<boolean> {
+  return db.$transaction(async (tx) => {
+    // Compare-and-swap rather than a read then a write: two clicks arriving together would
+    // both pass a separate check and queue the same work twice.
+    const { count } = await tx.enrichment.updateMany({
+      where: { intakeId, state: { in: ['READY', 'FAILED'] } },
+      // summary, risks and tags are deliberately untouched. A retry that ends in a hard failure
+      // would otherwise destroy a usable fallback result, and the detail page still shows it.
+      data: {
+        state: 'PENDING',
+        attempts: 0,
+        error: null,
+        nextAttemptAt: new Date(),
+        ...releasedLock,
+      },
+    });
+    if (count === 0) return false;
+
+    await emit(tx, intakeId, 'QUEUED', { retry: true });
+    return true;
+  });
+}
 
 export class SqliteJobStore implements JobStore {
   constructor(
@@ -188,48 +283,8 @@ export class SqliteJobStore implements JobStore {
   }
 
   // The Postgres adapter swaps LISTEN/NOTIFY in behind this same signature.
-  subscribe(sinceSeq: number, { onEvent, onError }: SubscribeHandlers): Subscription {
-    let cursor = sinceSeq;
-    let stopped = false;
-    let consecutiveFailures = 0;
-    let timer: NodeJS.Timeout | undefined;
-
-    const tick = async () => {
-      if (stopped) return;
-
-      try {
-        const rows = await this.db.event.findMany({
-          where: { seq: { gt: cursor } },
-          orderBy: { seq: 'asc' },
-          take: 200,
-        });
-        consecutiveFailures = 0;
-
-        for (const row of rows) {
-          if (stopped) return;
-          cursor = row.seq;
-          onEvent(row as QueueEvent);
-        }
-      } catch (err) {
-        consecutiveFailures += 1;
-        console.error(`[queue] event tail failed ${consecutiveFailures}x`, err);
-        onError?.(err, consecutiveFailures);
-      }
-
-      if (!stopped) {
-        const delay = TAIL_INTERVAL_MS * 2 ** Math.min(consecutiveFailures, MAX_TAIL_BACKOFF);
-        timer = setTimeout(tick, delay);
-      }
-    };
-
-    void tick();
-
-    return {
-      stop: () => {
-        stopped = true;
-        if (timer) clearTimeout(timer);
-      },
-    };
+  subscribe(sinceSeq: number, handlers: SubscribeHandlers): Subscription {
+    return tailEvents(this.db, { sinceSeq }, handlers);
   }
 
   // Token checked inside the transaction, so a reaped worker's late write rolls back whole.

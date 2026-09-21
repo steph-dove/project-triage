@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { AutoRefresh } from '@/components/auto-refresh';
 import { NoFilterMatches, NoIntakesYet } from '@/components/empty-states';
 import { IntakeCard } from '@/components/intake-card';
 import { FilterChips, Pagination } from '@/components/list-controls';
+import { ListStream } from '@/components/list-stream';
 import { isAnalysing, listIntakes } from '@/lib/intakes';
 import { ListIntakesQuerySchema } from '@/lib/schemas';
 import { STATUS_LABELS } from '@/lib/status';
@@ -22,7 +22,10 @@ export default async function IntakeListPage({ searchParams }: { searchParams: S
 
   return (
     <div className="space-y-6 pb-24 sm:pb-0">
-      <AutoRefresh enabled={list.items.some((intake) => isAnalysing(intake.enrichment))} />
+      <ListStream
+        enabled={list.items.some((intake) => isAnalysing(intake.enrichment))}
+        sinceSeq={list.sinceSeq}
+      />
 
       {list.totalAll > 0 && (
         <FilterChips counts={list.counts} totalAll={list.totalAll} active={query.status} />

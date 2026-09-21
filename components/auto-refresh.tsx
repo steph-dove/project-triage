@@ -6,8 +6,8 @@ import { useEffect, useState } from 'react';
 const INTERVAL_MS = 3_000;
 const GIVE_UP_AFTER_MS = 5 * 60_000;
 
-// Server components never re-render on their own, so until the Phase 5 event stream a finished
-// row would sit on "Analysing" forever.
+// Polling fallback for when the event stream will not stay up, since server components never
+// re-render on their own.
 export function AutoRefresh({ enabled }: { enabled: boolean }) {
   const router = useRouter();
   const [gaveUp, setGaveUp] = useState(false);
