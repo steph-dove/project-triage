@@ -70,6 +70,8 @@ model Tag {
   label    String
 
   @@index([label])
+  // The export loads tags for 500 intakes per batch.
+  @@index([intakeId])
 }
 
 // Append-only. `seq` is also the SSE resume cursor for Last-Event-ID.

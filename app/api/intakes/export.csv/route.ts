@@ -41,6 +41,9 @@ const select = {
 export async function GET() {
   const encoder = new TextEncoder();
   let cursor: string | undefined;
+  // Set when the browser gives up on the download, so a batch still in flight does not try to
+  // write to a closed stream and log a failure that never happened.
+  let cancelled = false;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -57,6 +60,7 @@ export async function GET() {
           take: BATCH,
           ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         });
+        if (cancelled) return;
 
         if (batch.length > 0) controller.enqueue(encoder.encode(toCsv(batch.map(toRow))));
         if (batch.length < BATCH) {
@@ -65,11 +69,16 @@ export async function GET() {
         }
         cursor = batch.at(-1)!.id;
       } catch (err) {
+        if (cancelled) return;
         // The 200 has already gone out, so erroring the stream is the only way to tell the
         // browser this download is incomplete rather than let it save a truncated file.
         console.error('[export] failed partway through the CSV', err);
         controller.error(err);
       }
+    },
+
+    cancel() {
+      cancelled = true;
     },
   });
 

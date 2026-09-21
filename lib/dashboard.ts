@@ -14,37 +14,35 @@ const RETRY_WINDOW_MS = 24 * 60 * 60_000;
 export type Dashboard = Awaited<ReturnType<typeof getDashboard>>;
 
 export async function getDashboard(now: Date = new Date()) {
-  // One transaction so every number comes from the same snapshot. Separate reads let an intake
-  // created mid-render push the status bars past the total.
-  const [total, byStatus, byState, fallbacks, tags, workers, latencies, recentRetries] =
-    await db.$transaction((tx) =>
-      Promise.all([
-        tx.intake.count(),
-        tx.intake.groupBy({ by: ['status'], _count: true }),
-        tx.enrichment.groupBy({ by: ['state'], _count: true }),
-        tx.enrichment.count({ where: { state: 'READY', source: 'FALLBACK' } }),
-        tx.tag.groupBy({
-          by: ['label'],
-          _count: { label: true },
-          // Label second so a tie does not reshuffle between refreshes.
-          orderBy: [{ _count: { label: 'desc' } }, { label: 'asc' }],
-          take: TOP_TAGS,
-        }),
-        liveWorkers(tx, now),
-        tx.enrichment.findMany({
-          where: { state: 'READY', source: 'LLM', latencyMs: { not: null } },
-          orderBy: { updatedAt: 'desc' },
-          take: LATENCY_SAMPLE,
-          select: { latencyMs: true },
-        }),
-        tx.event.count({
-          where: {
-            type: 'RETRY_SCHEDULED',
-            createdAt: { gt: new Date(now.getTime() - RETRY_WINDOW_MS) },
-          },
-        }),
-      ]),
-    );
+  // Not a transaction: Prisma opens one on SQLite with BEGIN IMMEDIATE, which would hold the
+  // write lock for the whole render and stall the workers. Total comes from the status groupBy
+  // instead, so the bars and the headline still add up.
+  const [byStatus, byState, fallbacks, tags, workers, latencies, recentRetries] =
+    await Promise.all([
+      db.intake.groupBy({ by: ['status'], _count: true }),
+      db.enrichment.groupBy({ by: ['state'], _count: true }),
+      db.enrichment.count({ where: { state: 'READY', source: 'FALLBACK' } }),
+      db.tag.groupBy({
+        by: ['label'],
+        _count: { label: true },
+        // Label second so a tie does not reshuffle between refreshes.
+        orderBy: [{ _count: { label: 'desc' } }, { label: 'asc' }],
+        take: TOP_TAGS,
+      }),
+      liveWorkers(db, now),
+      db.enrichment.findMany({
+        where: { state: 'READY', source: 'LLM', latencyMs: { not: null } },
+        orderBy: { updatedAt: 'desc' },
+        take: LATENCY_SAMPLE,
+        select: { latencyMs: true },
+      }),
+      db.event.count({
+        where: {
+          type: 'RETRY_SCHEDULED',
+          createdAt: { gt: new Date(now.getTime() - RETRY_WINDOW_MS) },
+        },
+      }),
+    ]);
 
   const statusCounts = Object.fromEntries(TRIAGE_STATUSES.map((s) => [s, 0])) as Record<
     TriageStatus,
@@ -53,6 +51,8 @@ export async function getDashboard(now: Date = new Date()) {
   for (const row of byStatus) {
     if (row.status in statusCounts) statusCounts[row.status as TriageStatus] = row._count;
   }
+
+  const total = byStatus.reduce((sum, row) => sum + row._count, 0);
 
   const stateCount = (state: EnrichmentState) =>
     byState.find((row) => row.state === state)?._count ?? 0;

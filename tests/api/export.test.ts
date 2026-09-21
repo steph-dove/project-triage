@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET } from '../../app/api/intakes/export.csv/route';
 import { BOM, csvCell, toCsv } from '../../lib/csv';
 
@@ -182,5 +182,21 @@ describe('GET /api/intakes/export.csv', () => {
     const at = rows[0].indexOf('risks');
 
     expect(rows.slice(1).map((row) => row[at]).sort()).toEqual(['not json', '{"a":1}']);
+  });
+
+  it('stops quietly when the download is cancelled mid-batch', async () => {
+    await intake('Warehouse routing', 'A description long enough to be realistic.');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const reader = (await GET()).body!.getReader();
+    await reader.read();
+    // Cancel while the first batch query is still in flight.
+    const pending = reader.read();
+    await reader.cancel();
+    await pending.catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
 });

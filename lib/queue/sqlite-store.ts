@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { emit, type EventType } from '../events';
 import type {
   ClaimedJob,
@@ -119,7 +119,7 @@ export async function requeueIntake(db: PrismaClient, intakeId: string): Promise
 
 // Beside announce() because the two halves of "online" have to agree: announce sets expiresAt a
 // lease ahead, and this counts whoever has not run out yet.
-export function liveWorkers(db: PrismaClient | Prisma.TransactionClient, now = new Date()) {
+export function liveWorkers(db: PrismaClient, now = new Date()) {
   return db.worker.findMany({ where: { expiresAt: { gt: now } }, select: { concurrency: true } });
 }
 
