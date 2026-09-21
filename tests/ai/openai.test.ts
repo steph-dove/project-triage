@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { describe, expect, it } from 'vitest';
-import { classify, partialSummary } from '../../lib/ai/openai';
+import { classify, parseTriageOutput, partialSummary } from '../../lib/ai/openai';
 import { UnprocessableIntakeError } from '../../lib/ai/types';
 import { RetriableError } from '../../lib/queue/types';
 
@@ -65,6 +65,26 @@ describe('classify', () => {
 
     expect(classify(new Error('socket hang up'), live)).toBeInstanceOf(RetriableError);
     expect(classify(already, live)).toBe(already);
+  });
+});
+
+describe('parseTriageOutput', () => {
+  const valid = { summary: 'A logistics forecasting pilot.', tags: ['a', 'b', 'c'], risks: [] };
+
+  it('accepts the agreed shape', () => {
+    expect(parseTriageOutput(JSON.stringify(valid))).toEqual(valid);
+  });
+
+  it.each([
+    ['a stream cut off mid-body', '{"summary": "A logistics fore'],
+    ['nothing at all', ''],
+    ['prose around the JSON', `Here you go: ${JSON.stringify(valid)}`],
+    ['a missing field', JSON.stringify({ summary: 'x', tags: [] })],
+    ['the wrong type', JSON.stringify({ ...valid, tags: 'a, b, c' })],
+    ['an empty summary', JSON.stringify({ ...valid, summary: '' })],
+    ['a summary that is only markdown', JSON.stringify({ ...valid, summary: '** __ `' })],
+  ])('retries %s rather than saving it', (_case, raw) => {
+    expect(() => parseTriageOutput(raw)).toThrow(RetriableError);
   });
 });
 

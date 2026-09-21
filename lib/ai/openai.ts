@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { RetriableError } from '../queue/types';
 import { cacheKey, readCache, writeCache } from './cache';
 import type { AiConfig } from './config';
-import { TRIAGE_JSON_SCHEMA, TriageOutputSchema } from './contract';
+import { TRIAGE_JSON_SCHEMA, TriageOutputSchema, type TriageOutput } from './contract';
 import { buildMessages, PROMPT_VERSION } from './prompt';
 import { UnprocessableIntakeError, type ProviderResult, type TriageProvider } from './types';
 
@@ -33,6 +33,14 @@ export function partialSummary(buffer: string) {
   } catch {
     // Mid-escape, so wait for the next chunk.
     return undefined;
+  }
+}
+
+export function parseTriageOutput(raw: string): TriageOutput {
+  try {
+    return TriageOutputSchema.parse(JSON.parse(raw));
+  } catch (err) {
+    throw new RetriableError('The model did not return the agreed JSON shape.', { cause: err });
   }
 }
 
@@ -105,15 +113,8 @@ export function createOpenAiProvider(config: AiConfig): TriageProvider {
         if (summary) ctx.onPartial(summary);
       }
 
-      let output;
-      try {
-        output = TriageOutputSchema.parse(JSON.parse(raw));
-      } catch (err) {
-        throw new RetriableError('The model did not return the agreed JSON shape.', { cause: err });
-      }
-
       const result: ProviderResult = {
-        output,
+        output: parseTriageOutput(raw),
         raw,
         model: config.model,
         latencyMs: Date.now() - startedAt,

@@ -11,6 +11,7 @@ plan.md
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 /build
 next-env.d.ts
@@ -47,6 +48,9 @@ pr-description.md
 
 # Cached model responses, so a re-run does not cost another call
 data/ai-cache/
+
+# npm run eval:dump output: real intake content, so it stays local
+/evals/
 
 # Review artifact written by the klaussy review skill
 REVIEW_OUTPUT.md
