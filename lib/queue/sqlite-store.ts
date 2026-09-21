@@ -7,6 +7,7 @@ import type {
   FailureOutcome,
   JobStore,
   QueueEvent,
+  SubscribeHandlers,
   Subscription,
 } from './types';
 
@@ -44,7 +45,7 @@ export class SqliteJobStore implements JobStore {
       if (claimed.length >= limit) break;
 
       const lockToken = randomUUID();
-      // Compare-and-swap on state: two workers racing the same row cannot both get count 1.
+      // Compare-and-swap: two workers racing the same row cannot both get count 1.
       const result = await this.db.enrichment.updateMany({
         where: { id: candidate.id, state: 'PENDING' },
         data: {
@@ -119,8 +120,7 @@ export class SqliteJobStore implements JobStore {
         },
       });
 
-      // Replaced wholesale rather than merged, so a retry does not leave tags from the attempt
-      // before it.
+      // Replaced, not merged, so a retry does not leave tags from the attempt before it.
       await tx.tag.deleteMany({ where: { intakeId } });
       if (result.tags.length > 0) {
         await tx.tag.createMany({
@@ -162,8 +162,7 @@ export class SqliteJobStore implements JobStore {
     });
   }
 
-  // Shutdown path: hand the job back without burning an attempt or scheduling a backoff, so
-  // another replica starts it now rather than waiting out the lease.
+  // Shutdown path: hand the job back without burning an attempt, so a replica starts it now.
   async release(enrichmentId: string, lockToken: string): Promise<boolean> {
     const result = await this.db.enrichment.updateMany({
       where: { id: enrichmentId, lockToken },
@@ -172,8 +171,7 @@ export class SqliteJobStore implements JobStore {
     return result.count === 1;
   }
 
-  // No coordinator or leader election: a dead worker stops extending its lease, and whichever
-  // worker notices first puts the row back.
+  // No coordinator: a dead worker stops extending its lease, whoever notices first resets it.
   async reap(): Promise<number> {
     const result = await this.db.enrichment.updateMany({
       where: { state: 'PROCESSING', leaseExpiresAt: { lt: new Date() } },
@@ -182,11 +180,11 @@ export class SqliteJobStore implements JobStore {
     return result.count;
   }
 
-  // Polling tail of the event log; the Postgres adapter swaps in LISTEN/NOTIFY behind the same
-  // signature.
-  subscribe(sinceSeq: number, onEvent: (event: QueueEvent) => void): Subscription {
+  // The Postgres adapter swaps LISTEN/NOTIFY in behind this same signature.
+  subscribe(sinceSeq: number, { onEvent, onError }: SubscribeHandlers): Subscription {
     let cursor = sinceSeq;
     let stopped = false;
+    let consecutiveFailures = 0;
     let timer: NodeJS.Timeout | undefined;
 
     const tick = async () => {
@@ -198,6 +196,7 @@ export class SqliteJobStore implements JobStore {
           orderBy: { seq: 'asc' },
           take: 200,
         });
+        consecutiveFailures = 0;
 
         for (const row of rows) {
           if (stopped) return;
@@ -205,7 +204,9 @@ export class SqliteJobStore implements JobStore {
           onEvent(row as QueueEvent);
         }
       } catch (err) {
-        console.error('[queue] event tail query failed, retrying next tick', err);
+        consecutiveFailures += 1;
+        console.error(`[queue] event tail failed ${consecutiveFailures}x`, err);
+        onError?.(err, consecutiveFailures);
       }
 
       if (!stopped) timer = setTimeout(tick, TAIL_INTERVAL_MS);
@@ -221,8 +222,7 @@ export class SqliteJobStore implements JobStore {
     };
   }
 
-  // Checks the fencing token inside the transaction, so a reaped worker's late write rolls back
-  // instead of clobbering whoever owns the job now.
+  // Token checked inside the transaction, so a reaped worker's late write rolls back whole.
   private async fenced(
     enrichmentId: string,
     lockToken: string,

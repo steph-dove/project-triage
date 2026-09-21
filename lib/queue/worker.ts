@@ -9,7 +9,6 @@ type InFlight = { job: ClaimedJob; controller: AbortController };
 export class Worker {
   private readonly inFlight = new Map<string, InFlight>();
   private running = false;
-  private draining = false;
   private pollTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
 
@@ -34,7 +33,6 @@ export class Worker {
 
   async stop() {
     if (!this.running) return;
-    this.draining = true;
     this.running = false;
 
     if (this.pollTimer) clearTimeout(this.pollTimer);
@@ -42,8 +40,7 @@ export class Worker {
 
     console.log(`[worker ${this.config.workerId}] draining ${this.inFlight.size} job(s)`);
 
-    // One lease is the longest a job can legitimately still be running, since a job that has not
-    // heartbeated by then has lost its claim anyway.
+    // A job that has not heartbeated within one lease has lost its claim anyway.
     const drained = await Promise.race([
       this.settle(),
       new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), this.config.leaseMs)),

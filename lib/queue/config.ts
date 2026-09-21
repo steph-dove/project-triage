@@ -29,9 +29,10 @@ export type WorkerConfig = {
   maxAttempts: number;
 };
 
-// Throws rather than falling back to defaults: a misconfigured worker is otherwise invisible
-// until it matters.
-export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
+// Throws rather than defaulting: a misconfigured worker is invisible until it matters.
+export function loadWorkerConfig(
+  env: Record<string, string | undefined> = process.env,
+): WorkerConfig {
   const parsed = WorkerConfigSchema.safeParse(env);
 
   if (!parsed.success) {
@@ -51,8 +52,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
   };
 }
 
-// 2s, 4s, 8s, plus jitter so replicas that failed on the same upstream blip do not all come
-// back at once.
+// Jittered so replicas that failed on the same upstream blip do not all return at once.
 export function backoffMs(attempts: number): number {
   const base = 2 ** attempts * 2_000;
   return Math.round(base + Math.random() * 1_000);

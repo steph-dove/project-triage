@@ -43,8 +43,14 @@ export type QueueEvent = {
 
 export type Subscription = { stop: () => void };
 
-// Terminal writes take a lockToken and return false once it no longer matches, so a worker
-// reaped mid-job cannot clobber the job's new owner.
+export type SubscribeHandlers = {
+  onEvent: (event: QueueEvent) => void;
+  // A stalled tail is otherwise indistinguishable from a quiet queue.
+  onError?: (err: unknown, consecutiveFailures: number) => void;
+};
+
+// Terminal writes return false when the lockToken no longer matches, so a worker reaped
+// mid-job cannot clobber the job's new owner.
 export interface JobStore {
   claim(limit: number): Promise<ClaimedJob[]>;
   heartbeat(enrichmentId: string, lockToken: string): Promise<boolean>;
@@ -52,7 +58,7 @@ export interface JobStore {
   fail(enrichmentId: string, lockToken: string, outcome: FailureOutcome): Promise<boolean>;
   release(enrichmentId: string, lockToken: string): Promise<boolean>;
   reap(): Promise<number>;
-  subscribe(sinceSeq: number, onEvent: (event: QueueEvent) => void): Subscription;
+  subscribe(sinceSeq: number, handlers: SubscribeHandlers): Subscription;
 }
 
 export type ProcessorContext = {
@@ -62,8 +68,7 @@ export type ProcessorContext = {
 
 export type Processor = (job: ClaimedJob, ctx: ProcessorContext) => Promise<EnrichmentResult>;
 
-// Thrown by a processor when a retry could plausibly succeed (timeouts, 5xx, an unparseable
-// response); anything else is terminal and retrying just burns attempts.
+// Anything not thrown as this is terminal, and retrying it just burns attempts.
 export class RetriableError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
