@@ -1,5 +1,11 @@
 import type { Prisma } from '@prisma/client';
-import type { EnrichmentState, TriageStatus } from './schemas';
+import { db } from './db';
+import {
+  TRIAGE_STATUSES,
+  type EnrichmentState,
+  type ListIntakesQuery,
+  type TriageStatus,
+} from './schemas';
 
 // Shared by the list and detail endpoints so they cannot drift.
 export const intakeSelect = {
@@ -18,6 +24,9 @@ export const intakeSelect = {
       summary: true,
       risks: true,
       source: true,
+      model: true,
+      promptVersion: true,
+      latencyMs: true,
       attempts: true,
       error: true,
       updatedAt: true,
@@ -28,6 +37,47 @@ export const intakeSelect = {
 type IntakeRow = Prisma.IntakeGetPayload<{ select: typeof intakeSelect }>;
 
 export type SerializedIntake = ReturnType<typeof serializeIntake>;
+export type StatusCounts = Record<TriageStatus, number>;
+export type IntakeList = Awaited<ReturnType<typeof listIntakes>>;
+
+// The route handler and the list page both come through here, so the JSON and the rendered
+// page always agree about what page 2 contains.
+export async function listIntakes({ page, pageSize, status }: ListIntakesQuery) {
+  const where = status ? { status } : {};
+
+  const [rows, total, grouped] = await Promise.all([
+    db.intake.findMany({
+      where,
+      select: intakeSelect,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.intake.count({ where }),
+    // Unfiltered on purpose: the chips show what you would get by switching filter.
+    db.intake.groupBy({ by: ['status'], _count: true }),
+  ]);
+
+  const counts = Object.fromEntries(TRIAGE_STATUSES.map((s) => [s, 0])) as StatusCounts;
+  for (const row of grouped) {
+    if (row.status in counts) counts[row.status as TriageStatus] = row._count;
+  }
+
+  return {
+    items: rows.map(serializeIntake),
+    page,
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    counts,
+    totalAll: Object.values(counts).reduce((a, b) => a + b, 0),
+  };
+}
+
+export async function getIntake(id: string): Promise<SerializedIntake | null> {
+  const intake = await db.intake.findUnique({ where: { id }, select: intakeSelect });
+  return intake ? serializeIntake(intake) : null;
+}
 
 export function serializeIntake(intake: IntakeRow) {
   const { tags, enrichment, createdAt, status, ...rest } = intake;
@@ -43,6 +93,9 @@ export function serializeIntake(intake: IntakeRow) {
           summary: enrichment.summary,
           risks: parseRisks(enrichment.risks),
           source: enrichment.source,
+          model: enrichment.model,
+          promptVersion: enrichment.promptVersion,
+          latencyMs: enrichment.latencyMs,
           attempts: enrichment.attempts,
           error: enrichment.error,
           updatedAt: enrichment.updatedAt.toISOString(),

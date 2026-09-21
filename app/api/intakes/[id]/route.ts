@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { emit } from '@/lib/events';
-import { intakeSelect, serializeIntake } from '@/lib/intakes';
+import { getIntake, intakeSelect, serializeIntake } from '@/lib/intakes';
 import { UpdateIntakeSchema } from '@/lib/schemas';
 
 type Params = { params: Promise<{ id: string }> };
@@ -9,12 +9,12 @@ type Params = { params: Promise<{ id: string }> };
 export async function GET(_request: Request, { params }: Params) {
   const { id } = await params;
 
-  const intake = await db.intake.findUnique({ where: { id }, select: intakeSelect });
+  const intake = await getIntake(id);
   if (!intake) {
     return NextResponse.json({ error: 'No intake with that id.' }, { status: 404 });
   }
 
-  return NextResponse.json(serializeIntake(intake));
+  return NextResponse.json(intake);
 }
 
 export async function PATCH(request: Request, { params }: Params) {
