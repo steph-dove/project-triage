@@ -27,7 +27,10 @@ FROM deps AS migrate
 COPY prisma ./prisma
 RUN npx prisma generate
 USER node
-CMD ["npx", "prisma", "migrate", "deploy"]
+# Compose re-runs this on every `up`, including while web and workers are live. Prisma's
+# migrate engine cannot take its lock while any other connection has the file open, so deploy
+# would fail every time. `migrate status` only reads, and exits 0 when nothing is pending.
+CMD ["sh", "-c", "if npx prisma migrate status >/dev/null 2>&1; then echo 'Schema is up to date.'; else exec npx prisma migrate deploy; fi"]
 
 FROM base AS runner
 ENV NODE_ENV=production PORT=3000

@@ -2,6 +2,9 @@
 # docker compose up --scale worker=3    or set WORKER_REPLICAS
 # docker compose run --rm migrate npx prisma db seed    load the sample intakes
 #
+# A new migration needs the app stopped first (docker compose down, then up): Prisma cannot
+# migrate a SQLite file that web and the workers have open.
+#
 # Values come from .env when it exists. Without one, the worker runs on the mock AI provider,
 # so a clean clone starts with no API key. Set AI_PROVIDER=openai and OPENAI_API_KEY for the
 # real model.
