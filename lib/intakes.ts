@@ -113,7 +113,7 @@ export function serializeIntake(intake: IntakeRow) {
 }
 
 // A hand-edited or legacy row should not take down the detail page.
-function parseRisks(raw: string | null): string[] {
+export function parseRisks(raw: string | null): string[] {
   if (!raw) return [];
 
   try {

@@ -1,7 +1,10 @@
 import { z } from 'zod';
+import { stripMarkdown } from './guardrails';
 
 export const TriageOutputSchema = z.object({
-  summary: z.string().min(1),
+  // Checked after stripping, because that is what gets saved: "**" passes min(1) and then
+  // stores an empty summary as a READY result.
+  summary: z.string().refine((s) => stripMarkdown(s).length > 0, 'The summary is empty.'),
   tags: z.array(z.string()),
   risks: z.array(z.string()),
 });

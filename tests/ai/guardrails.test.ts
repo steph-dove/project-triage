@@ -10,6 +10,15 @@ describe('toTag', () => {
   it('returns empty for something with no letters in it', () => {
     expect(toTag('!!!')).toBe('');
   });
+
+  it('truncates a long tag without leaving a hyphen dangling off the end', () => {
+    const tag = toTag('Enterprise resource planning migration programme');
+
+    expect(tag.length).toBeLessThanOrEqual(32);
+    expect(tag).toBe('enterprise-resource-planning-mig');
+    // The 32nd character is the hyphen between "abcd" and "efg".
+    expect(toTag('abcdefghijklmnopqrstuvwxyz abcd efg')).toBe('abcdefghijklmnopqrstuvwxyz-abcd');
+  });
 });
 
 describe('normalizeTags', () => {
@@ -23,6 +32,22 @@ describe('normalizeTags', () => {
       'machine-learning',
       'nlp',
       'untagged-3',
+    ]);
+  });
+
+  it('collapses spellings of the same tag into one and fills the gap', () => {
+    expect(normalizeTags(['ML Ops', 'ml-ops', '**ML  ops!**'], ['logistics'])).toEqual([
+      'ml-ops',
+      'logistics',
+      'untagged-3',
+    ]);
+  });
+
+  it('does not let the filler repeat a tag the model already gave', () => {
+    expect(normalizeTags(['Logistics'], ['logistics', 'needs-review', 'triage'])).toEqual([
+      'logistics',
+      'needs-review',
+      'triage',
     ]);
   });
 
@@ -42,6 +67,21 @@ describe('clampSummary', () => {
     expect(summary.length).toBeLessThanOrEqual(604);
     expect(summary.endsWith('...')).toBe(true);
     expect(summary).not.toContain('wor...');
+  });
+
+  it('leaves a summary of exactly the limit alone', () => {
+    const summary = 'a'.repeat(600);
+
+    expect(clampSummary(summary)).toBe(summary);
+  });
+
+  it('hard cuts a summary with no space to break on', () => {
+    expect(clampSummary('a'.repeat(700))).toBe(`${'a'.repeat(600)}...`);
+  });
+
+  it('comes back empty from a summary that was only markdown', () => {
+    // Which is why the contract refuses one: see parseTriageOutput.
+    expect(clampSummary('**  __ ##')).toBe('');
   });
 });
 
