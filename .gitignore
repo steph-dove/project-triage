@@ -16,6 +16,9 @@ plan.md
 next-env.d.ts
 *.tsbuildinfo
 
+# bundled worker (npm run build:worker)
+/dist
+
 # testing
 /coverage
 /test-results

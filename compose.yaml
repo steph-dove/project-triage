@@ -1,0 +1,59 @@
+# docker compose up                     web on :3000 (PORT=3100 to publish elsewhere), two workers
+# docker compose up --scale worker=3    or set WORKER_REPLICAS
+# docker compose run --rm migrate npx prisma db seed    load the sample intakes
+#
+# A new migration needs `docker compose down` first: Prisma can't migrate a SQLite file that's open.
+# The worker reads .env; with AI_PROVIDER=openai and OPENAI_API_KEY set there it calls the real model, otherwise mock.
+
+x-app: &app
+  build:
+    context: .
+    target: runner
+  image: project-triage:local
+  volumes:
+    - ./data:/app/data
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+x-database: &database
+  DATABASE_URL: file:/app/data/dev.db
+
+services:
+  migrate:
+    build:
+      context: .
+      target: migrate
+    image: project-triage-migrate:local
+    environment:
+      <<: *database
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
+  web:
+    <<: *app
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      <<: *database
+    # Open SSE streams never finish, and web holds no leases, so don't wait long for them.
+    stop_grace_period: 3s
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: ["node", "dist/worker.js"]
+    # Read at runtime, never copied into the image (.dockerignore excludes it).
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # .env's relative DATABASE_URL points outside the container, so this wins over it.
+      <<: *database
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    # Keep above WORKER_DRAIN_MS, or SIGKILL lands before leases are handed back.
+    stop_grace_period: 20s
+    restart: unless-stopped
