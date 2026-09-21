@@ -14,6 +14,7 @@ import type {
 class StaleLockError extends Error {}
 
 const TAIL_INTERVAL_MS = 250;
+const MAX_TAIL_BACKOFF = 5;
 
 const releasedLock = {
   lockedBy: null,
@@ -162,11 +163,17 @@ export class SqliteJobStore implements JobStore {
     });
   }
 
-  // Shutdown path: hand the job back without burning an attempt, so a replica starts it now.
+  // claim() counts the attempt up front, so the hand-back gives it back: otherwise rolling
+  // restarts alone would exhaust maxAttempts on a job that never ran.
   async release(enrichmentId: string, lockToken: string): Promise<boolean> {
     const result = await this.db.enrichment.updateMany({
       where: { id: enrichmentId, lockToken },
-      data: { state: 'PENDING', nextAttemptAt: new Date(), ...releasedLock },
+      data: {
+        state: 'PENDING',
+        nextAttemptAt: new Date(),
+        attempts: { decrement: 1 },
+        ...releasedLock,
+      },
     });
     return result.count === 1;
   }
@@ -209,7 +216,10 @@ export class SqliteJobStore implements JobStore {
         onError?.(err, consecutiveFailures);
       }
 
-      if (!stopped) timer = setTimeout(tick, TAIL_INTERVAL_MS);
+      if (!stopped) {
+        const delay = TAIL_INTERVAL_MS * 2 ** Math.min(consecutiveFailures, MAX_TAIL_BACKOFF);
+        timer = setTimeout(tick, delay);
+      }
     };
 
     void tick();

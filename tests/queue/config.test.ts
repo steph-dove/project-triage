@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backoffMs, loadWorkerConfig } from '../../lib/queue/config';
+import { backoffMs, loadWorkerConfig, MAX_BACKOFF_MS } from '../../lib/queue/config';
 
 const base = {
   WORKER_CONCURRENCY: '4',
@@ -7,6 +7,7 @@ const base = {
   WORKER_LEASE_MS: '60000',
   WORKER_HEARTBEAT_MS: '15000',
   WORKER_MAX_ATTEMPTS: '3',
+  WORKER_DRAIN_MS: '10000',
 };
 
 describe('loadWorkerConfig', () => {
@@ -50,5 +51,9 @@ describe('backoffMs', () => {
       expect(value).toBeGreaterThanOrEqual(base);
       expect(value).toBeLessThanOrEqual(base + 1_000);
     }
+  });
+
+  it('stops growing at the ceiling', () => {
+    expect(backoffMs(20)).toBeLessThanOrEqual(MAX_BACKOFF_MS + 1_000);
   });
 });

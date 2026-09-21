@@ -40,10 +40,11 @@ export class Worker {
 
     console.log(`[worker ${this.config.workerId}] draining ${this.inFlight.size} job(s)`);
 
-    // A job that has not heartbeated within one lease has lost its claim anyway.
+    // Has to land inside the scheduler's SIGTERM grace, or we get SIGKILLed mid-drain and
+    // release nothing.
     const drained = await Promise.race([
       this.settle(),
-      new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), this.config.leaseMs)),
+      new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), this.config.drainMs)),
     ]);
 
     for (const { job, controller } of this.inFlight.values()) {
@@ -55,6 +56,14 @@ export class Worker {
 
     if (drained === 'timeout') console.warn('[worker] drain timed out, released the stragglers');
     console.log(`[worker ${this.config.workerId}] stopped`);
+  }
+
+  // inFlight is keyed by enrichmentId, so a late-settling run must not evict a newer claim
+  // of the same row.
+  private forget(job: ClaimedJob) {
+    if (this.inFlight.get(job.enrichmentId)?.job.lockToken === job.lockToken) {
+      this.inFlight.delete(job.enrichmentId);
+    }
   }
 
   private async settle() {
@@ -90,7 +99,7 @@ export class Worker {
           // Reaped mid-job: stop now rather than finish and be rejected by the fencing token.
           console.warn(`[worker] lost the lease on ${job.enrichmentId}, abandoning it`);
           controller.abort();
-          this.inFlight.delete(job.enrichmentId);
+          this.forget(job);
         }
       } catch (err) {
         console.error(`[worker] heartbeat failed for ${job.enrichmentId}`, err);
@@ -116,9 +125,17 @@ export class Worker {
         console.warn(`[worker] discarded a stale result for ${job.enrichmentId}`);
       }
     } catch (err) {
-      await this.onFailure(job, err);
+      // stop() clears running before it aborts anything, so this tells a shutdown abort apart
+      // from a real failure.
+      if (this.running) {
+        await this.onFailure(job, err);
+      } else {
+        await this.store.release(job.enrichmentId, job.lockToken).catch((releaseErr) => {
+          console.error(`[worker] could not release ${job.enrichmentId} on shutdown`, releaseErr);
+        });
+      }
     } finally {
-      this.inFlight.delete(job.enrichmentId);
+      this.forget(job);
     }
   }
 

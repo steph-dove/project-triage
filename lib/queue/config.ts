@@ -1,6 +1,8 @@
 import { hostname } from 'node:os';
 import { z } from 'zod';
 
+export const MAX_BACKOFF_MS = 5 * 60_000;
+
 const positiveInt = (name: string) =>
   z.coerce
     .number({ invalid_type_error: `${name} must be a number.` })
@@ -14,6 +16,7 @@ const WorkerConfigSchema = z
     WORKER_LEASE_MS: positiveInt('WORKER_LEASE_MS').default(60_000),
     WORKER_HEARTBEAT_MS: positiveInt('WORKER_HEARTBEAT_MS').default(15_000),
     WORKER_MAX_ATTEMPTS: positiveInt('WORKER_MAX_ATTEMPTS').default(3),
+    WORKER_DRAIN_MS: positiveInt('WORKER_DRAIN_MS').default(10_000),
   })
   .refine((c) => c.WORKER_HEARTBEAT_MS < c.WORKER_LEASE_MS, {
     message:
@@ -27,6 +30,7 @@ export type WorkerConfig = {
   leaseMs: number;
   heartbeatMs: number;
   maxAttempts: number;
+  drainMs: number;
 };
 
 // Throws rather than defaulting: a misconfigured worker is invisible until it matters.
@@ -49,11 +53,13 @@ export function loadWorkerConfig(
     leaseMs: c.WORKER_LEASE_MS,
     heartbeatMs: c.WORKER_HEARTBEAT_MS,
     maxAttempts: c.WORKER_MAX_ATTEMPTS,
+    drainMs: c.WORKER_DRAIN_MS,
   };
 }
 
-// Jittered so replicas that failed on the same upstream blip do not all return at once.
+// Jittered so replicas that failed on the same upstream blip do not all return at once, and
+// capped because WORKER_MAX_ATTEMPTS is operator-set and 2 ** 20 attempts is weeks out.
 export function backoffMs(attempts: number): number {
-  const base = 2 ** attempts * 2_000;
+  const base = Math.min(2 ** attempts * 2_000, MAX_BACKOFF_MS);
   return Math.round(base + Math.random() * 1_000);
 }

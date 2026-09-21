@@ -217,7 +217,7 @@ describe('release', () => {
 
     const row = await db.enrichment.findUniqueOrThrow({ where: { id: enrichmentId } });
     expect(row.state).toBe('PENDING');
-    expect(row.attempts).toBe(1);
+    expect(row.attempts).toBe(0);
     expect(row.nextAttemptAt.getTime()).toBeLessThanOrEqual(Date.now());
   });
 });
