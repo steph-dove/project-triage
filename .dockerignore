@@ -1,0 +1,26 @@
+.git
+node_modules
+.next
+dist
+coverage
+test-results
+playwright-report
+
+# The database lives on the ./data bind mount, never in the image.
+data
+
+.env*
+!.env.example
+
+# Agent and editor config
+.claude
+.codex
+.cursor
+.gemini
+.github
+
+*.md
+*.tsbuildinfo
+Dockerfile
+compose.yaml
+.dockerignore

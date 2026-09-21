@@ -13,7 +13,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
-    "worker": "tsx --env-file-if-exists=.env worker.ts"
+    "worker": "tsx --env-file-if-exists=.env worker.ts",
+    "build:worker": "esbuild worker.ts --bundle --platform=node --target=node24 --external:@prisma/client --outfile=dist/worker.js"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -32,6 +33,7 @@
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "15.5.25",
     "prisma": "^6.1.0",

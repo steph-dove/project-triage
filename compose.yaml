@@ -1,0 +1,65 @@
+# docker compose up                     web on :3000, two workers
+# docker compose up --scale worker=3    or set WORKER_REPLICAS
+# docker compose run --rm migrate npx prisma db seed    load the sample intakes
+#
+# Values come from .env when it exists. Without one, the worker runs on the mock AI provider,
+# so a clean clone starts with no API key. Set AI_PROVIDER=openai and OPENAI_API_KEY for the
+# real model.
+
+x-app: &app
+  build:
+    context: .
+    target: runner
+  image: project-triage:local
+  volumes:
+    - ./data:/app/data
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+x-database: &database
+  # The ./data bind mount holds dev.db and its WAL sidecars; every service opens the same file.
+  DATABASE_URL: file:/app/data/dev.db
+
+services:
+  migrate:
+    build:
+      context: .
+      target: migrate
+    image: project-triage-migrate:local
+    environment:
+      <<: *database
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
+  web:
+    <<: *app
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      <<: *database
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *database
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
+      FORCE_AI_FAILURE: ${FORCE_AI_FAILURE:-}
+      # The config schema rejects an empty string, so each default here mirrors the code's.
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_POLL_MS: ${WORKER_POLL_MS:-500}
+      WORKER_LEASE_MS: ${WORKER_LEASE_MS:-60000}
+      WORKER_HEARTBEAT_MS: ${WORKER_HEARTBEAT_MS:-15000}
+      WORKER_DRAIN_MS: ${WORKER_DRAIN_MS:-10000}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    # Longer than WORKER_DRAIN_MS, so SIGTERM gets to hand leases back before SIGKILL.
+    stop_grace_period: 20s
+    restart: unless-stopped
