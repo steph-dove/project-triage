@@ -1,6 +1,15 @@
 import type { ClaimedJob } from '../queue/types';
 import type { TriageOutput } from './contract';
 
+// The model cannot do anything with this one intake, but the deployment is fine, so a
+// heuristic triage helps here where a hard failure would not.
+export class UnprocessableIntakeError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'UnprocessableIntakeError';
+  }
+}
+
 export type ProviderResult = {
   output: TriageOutput;
   raw: string;

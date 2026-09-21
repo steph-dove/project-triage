@@ -10,6 +10,7 @@ const FAILURE_MODES = {
   true: 'retriable',
   yes: 'retriable',
   retriable: 'retriable',
+  unprocessable: 'unprocessable',
   terminal: 'terminal',
 } as const;
 
@@ -20,7 +21,10 @@ const AiConfigSchema = z
         errorMap: () => ({ message: `AI_PROVIDER must be one of ${AI_PROVIDERS.join(', ')}.` }),
       })
       .default('openai'),
-    OPENAI_API_KEY: z.string().trim().min(1).optional(),
+    OPENAI_API_KEY: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().trim().min(1).optional(),
+    ),
     OPENAI_MODEL: z.string().trim().min(1).default('gpt-4o-mini'),
     AI_TIMEOUT_MS: z.coerce
       .number({ invalid_type_error: 'AI_TIMEOUT_MS must be a number.' })
@@ -32,7 +36,7 @@ const AiConfigSchema = z
       .string()
       .trim()
       .transform((v) => v.toLowerCase())
-      .refine((v) => FAILURE_OFF.has(v) || v in FAILURE_MODES, {
+      .refine((v) => FAILURE_OFF.has(v) || Object.hasOwn(FAILURE_MODES, v), {
         message: `FORCE_AI_FAILURE must be one of ${Object.keys(FAILURE_MODES).join(', ')}, or unset.`,
       })
       .optional(),
@@ -48,7 +52,7 @@ export type AiConfig = {
   model: string;
   timeoutMs: number;
   cache: boolean;
-  forceFailure?: 'retriable' | 'terminal';
+  forceFailure?: 'retriable' | 'unprocessable' | 'terminal';
 };
 
 export function loadAiConfig(env: Record<string, string | undefined> = process.env): AiConfig {
@@ -67,9 +71,11 @@ export function loadAiConfig(env: Record<string, string | undefined> = process.e
     apiKey: c.OPENAI_API_KEY,
     model: c.AI_PROVIDER === 'mock' ? 'mock' : c.OPENAI_MODEL,
     timeoutMs: c.AI_TIMEOUT_MS,
-    // On by default outside production: re-running the same intake during a demo or a test
-    // should not cost another call.
-    cache: c.AI_CACHE ? truthy.has(c.AI_CACHE.toLowerCase()) : c.NODE_ENV !== 'production',
+    // Only where NODE_ENV says so: anywhere else, caching client intakes to disk needs
+    // AI_CACHE set on purpose.
+    cache: c.AI_CACHE
+      ? truthy.has(c.AI_CACHE.toLowerCase())
+      : c.NODE_ENV === 'development' || c.NODE_ENV === 'test',
     forceFailure: FAILURE_OFF.has(forced)
       ? undefined
       : FAILURE_MODES[forced as keyof typeof FAILURE_MODES],

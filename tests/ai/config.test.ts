@@ -6,6 +6,11 @@ describe('loadAiConfig', () => {
     expect(() => loadAiConfig({})).toThrow(/OPENAI_API_KEY is required/);
   });
 
+  it('treats a blank key the way .env.example writes it, as no key at all', () => {
+    expect(loadAiConfig({ AI_PROVIDER: 'mock', OPENAI_API_KEY: '' }).apiKey).toBeUndefined();
+    expect(() => loadAiConfig({ OPENAI_API_KEY: '   ' })).toThrow(/OPENAI_API_KEY is required/);
+  });
+
   it('needs no key for the mock provider', () => {
     const config = loadAiConfig({ AI_PROVIDER: 'mock' });
 
@@ -24,12 +29,17 @@ describe('loadAiConfig', () => {
     expect(config.timeoutMs).toBe(5_000);
   });
 
-  it('caches outside production and not in it', () => {
-    expect(loadAiConfig({ AI_PROVIDER: 'mock' }).cache).toBe(true);
-    expect(loadAiConfig({ AI_PROVIDER: 'mock', NODE_ENV: 'production' }).cache).toBe(false);
-    expect(loadAiConfig({ AI_PROVIDER: 'mock', NODE_ENV: 'production', AI_CACHE: '1' }).cache).toBe(
-      true,
-    );
+  it('caches only where NODE_ENV says so, or where AI_CACHE says so', () => {
+    const cache = (env: Record<string, string>) =>
+      loadAiConfig({ AI_PROVIDER: 'mock', ...env }).cache;
+
+    expect(cache({ NODE_ENV: 'development' })).toBe(true);
+    expect(cache({ NODE_ENV: 'test' })).toBe(true);
+    expect(cache({ NODE_ENV: 'production' })).toBe(false);
+    // A worker started with plain tsx has no NODE_ENV at all.
+    expect(cache({})).toBe(false);
+    expect(cache({ AI_CACHE: '1' })).toBe(true);
+    expect(cache({ NODE_ENV: 'development', AI_CACHE: '0' })).toBe(false);
   });
 
   it('reads the two forced failure modes under either spelling', () => {
@@ -43,9 +53,11 @@ describe('loadAiConfig', () => {
     expect(forced('0')).toBeUndefined();
   });
 
-  it('refuses a FORCE_AI_FAILURE value it does not recognise', () => {
-    expect(() => loadAiConfig({ AI_PROVIDER: 'mock', FORCE_AI_FAILURE: 'sometimes' })).toThrow(
-      /FORCE_AI_FAILURE must be one of/,
-    );
+  it('refuses a FORCE_AI_FAILURE value it does not recognise, inherited ones included', () => {
+    for (const value of ['sometimes', 'constructor', 'toString']) {
+      expect(() => loadAiConfig({ AI_PROVIDER: 'mock', FORCE_AI_FAILURE: value })).toThrow(
+        /FORCE_AI_FAILURE must be one of/,
+      );
+    }
   });
 });

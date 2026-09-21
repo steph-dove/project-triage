@@ -71,6 +71,15 @@ describe('the enrichment processor', () => {
     expect(result.rawResponse).toContain('fallbackReason');
   });
 
+  it('falls back on the first attempt when the model rejects the intake itself', async () => {
+    const { ctx } = context();
+
+    const result = await processor({ FORCE_AI_FAILURE: 'unprocessable' })(job(1), ctx);
+
+    expect(result.source).toBe('FALLBACK');
+    expect(result.rawResponse).toContain('fallbackReason');
+  });
+
   it('never falls back on a terminal failure, however many attempts are left', async () => {
     const { ctx } = context();
 

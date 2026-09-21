@@ -4,15 +4,27 @@ import { cacheKey, readCache, writeCache } from './cache';
 import type { AiConfig } from './config';
 import { TRIAGE_JSON_SCHEMA, TriageOutputSchema } from './contract';
 import { buildMessages, PROMPT_VERSION } from './prompt';
-import type { ProviderResult, TriageProvider } from './types';
+import { UnprocessableIntakeError, type ProviderResult, type TriageProvider } from './types';
 
 const RETRIABLE_STATUS = new Set([408, 409, 429]);
+// Any other 400 means the request itself is wrong, and falling back would hide a bad
+// OPENAI_MODEL behind degraded triages.
+const UNPROCESSABLE_CODES = new Set([
+  'context_length_exceeded',
+  'string_above_max_length',
+  'invalid_prompt',
+  'content_policy_violation',
+]);
+
+const unprocessable = (err: InstanceType<typeof OpenAI.APIError>) =>
+  err.status === 422 ||
+  (err.status === 400 && typeof err.code === 'string' && UNPROCESSABLE_CODES.has(err.code));
 
 // Reads the summary out of a JSON body that is still being written, so the detail page has
 // something to show before the model is done.
 const PARTIAL_SUMMARY = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)/;
 
-function partialSummary(buffer: string) {
+export function partialSummary(buffer: string) {
   const match = PARTIAL_SUMMARY.exec(buffer);
   if (!match) return undefined;
 
@@ -24,15 +36,22 @@ function partialSummary(buffer: string) {
   }
 }
 
-function classify(err: unknown, shutdown: AbortSignal): unknown {
+export function classify(err: unknown, shutdown: AbortSignal): unknown {
   if (err instanceof RetriableError) return err;
   // A shutdown aborts this same signal, and the worker's drain path owns that case.
   if (shutdown.aborted) return err;
 
   if (err instanceof OpenAI.APIError && typeof err.status === 'number') {
-    return err.status >= 500 || RETRIABLE_STATUS.has(err.status)
-      ? new RetriableError(`OpenAI returned ${err.status}.`, { cause: err })
-      : new Error(`OpenAI rejected the request with ${err.status}: ${err.message}`);
+    if (err.status >= 500 || RETRIABLE_STATUS.has(err.status)) {
+      return new RetriableError(`OpenAI returned ${err.status}.`, { cause: err });
+    }
+    if (unprocessable(err)) {
+      return new UnprocessableIntakeError(
+        `OpenAI would not process this intake (${err.status} ${err.code}): ${err.message}`,
+        { cause: err },
+      );
+    }
+    return new Error(`OpenAI rejected the request with ${err.status}: ${err.message}`);
   }
 
   const message = err instanceof Error ? err.message : String(err);
@@ -48,9 +67,11 @@ export function createOpenAiProvider(config: AiConfig): TriageProvider {
 
     if (config.cache) {
       const hit = await readCache<ProviderResult>(key);
-      if (hit) {
-        ctx.onPartial(hit.output.summary);
-        return { ...hit, latencyMs: 0, cached: true };
+      const output = TriageOutputSchema.safeParse(hit?.output);
+      if (hit && output.success) {
+        ctx.onPartial(output.data.summary);
+        // Zeroed because this run spent nothing, and the uncached run recorded the real spend.
+        return { ...hit, output: output.data, latencyMs: 0, tokensIn: 0, tokensOut: 0, cached: true };
       }
     }
 

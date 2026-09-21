@@ -3,14 +3,17 @@ import { heuristicTriage } from '../../ai/fallback';
 import { applyGuardrails } from '../../ai/guardrails';
 import { PROMPT_VERSION } from '../../ai/prompt';
 import { createProvider } from '../../ai/provider';
+import { UnprocessableIntakeError } from '../../ai/types';
 import { RetriableError, type EnrichmentResult, type Processor } from '../types';
 
 const PARTIAL_INTERVAL_MS = 300;
 
-const forcedFailure = (mode: NonNullable<AiConfig['forceFailure']>) =>
-  mode === 'terminal'
-    ? new Error('FORCE_AI_FAILURE=terminal, so the model was never called.')
-    : new RetriableError('FORCE_AI_FAILURE is set, so the model was never called.');
+const forcedFailure = (mode: NonNullable<AiConfig['forceFailure']>) => {
+  const message = `FORCE_AI_FAILURE=${mode}, so the model was never called.`;
+  if (mode === 'terminal') return new Error(message);
+  if (mode === 'unprocessable') return new UnprocessableIntakeError(message);
+  return new RetriableError(message);
+};
 
 export function createEnrichmentProcessor(config: AiConfig, maxAttempts: number): Processor {
   const provider = createProvider(config);
@@ -44,10 +47,11 @@ export function createEnrichmentProcessor(config: AiConfig, maxAttempts: number)
         tokensOut: result.tokensOut,
       } satisfies EnrichmentResult;
     } catch (err) {
-      const retriable = err instanceof RetriableError;
-      if (ctx.signal.aborted || !retriable || job.attempts < maxAttempts) throw err;
+      const spent = err instanceof RetriableError && job.attempts >= maxAttempts;
+      const unprocessable = err instanceof UnprocessableIntakeError;
+      if (ctx.signal.aborted || !(spent || unprocessable)) throw err;
 
-      // Out of retries on a reachable failure: a heuristic triage beats an empty detail page.
+      // A heuristic triage beats an empty detail page once the model is out of chances.
       console.warn(`[ai] falling back to the heuristic for ${job.intakeId}: ${err.message}`);
       return {
         ...heuristicTriage(job.intake),
