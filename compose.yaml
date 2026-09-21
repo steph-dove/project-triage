@@ -3,7 +3,7 @@
 # docker compose run --rm migrate npx prisma db seed    load the sample intakes
 #
 # A new migration needs `docker compose down` first: Prisma can't migrate a SQLite file that's open.
-# Without a .env the worker uses the mock AI provider; set AI_PROVIDER=openai and OPENAI_API_KEY for the real one.
+# The worker reads .env; with AI_PROVIDER=openai and OPENAI_API_KEY set there it calls the real model, otherwise mock.
 
 x-app: &app
   build:
@@ -44,20 +44,14 @@ services:
   worker:
     <<: *app
     command: ["node", "dist/worker.js"]
+    # Read at runtime, never copied into the image (.dockerignore excludes it).
+    env_file:
+      - path: .env
+        required: false
     environment:
+      # .env's relative DATABASE_URL points outside the container, so this wins over it.
       <<: *database
       AI_PROVIDER: ${AI_PROVIDER:-mock}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
-      FORCE_AI_FAILURE: ${FORCE_AI_FAILURE:-}
-      # Defaults mirror the code's, because its config schema rejects an empty string.
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
-      WORKER_POLL_MS: ${WORKER_POLL_MS:-500}
-      WORKER_LEASE_MS: ${WORKER_LEASE_MS:-60000}
-      WORKER_HEARTBEAT_MS: ${WORKER_HEARTBEAT_MS:-15000}
-      WORKER_DRAIN_MS: ${WORKER_DRAIN_MS:-10000}
-      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
     # Keep above WORKER_DRAIN_MS, or SIGKILL lands before leases are handed back.
