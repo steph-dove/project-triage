@@ -12,6 +12,8 @@ type Enrichment = NonNullable<SerializedIntake['enrichment']>;
 
 const attemptCount = (n: number) => `${n} attempt${n === 1 ? '' : 's'}`;
 
+// No loading.tsx or Suspense here: in production builds they sometimes made the router drop
+// router.refresh(), leaving a finished analysis on the live stepper.
 export default async function IntakeDetailPage({
   params,
 }: {
