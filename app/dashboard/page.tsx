@@ -1,13 +1,18 @@
 import type { Metadata } from 'next';
-import { getDashboard, type Dashboard } from '@/lib/dashboard';
+import {
+  barPercent,
+  formatLatency,
+  formatRange,
+  formatShare,
+  getDashboard,
+  type Dashboard,
+} from '@/lib/dashboard';
 import { STATUS_LABELS } from '@/lib/status';
 
 export const metadata: Metadata = { title: 'Dashboard · Intake Triage' };
 
 // Rendered per request: the worker writes behind Next's back, so a cached render is stale.
 export const dynamic = 'force-dynamic';
-
-const NONE = '—';
 
 export default async function DashboardPage() {
   const data = await getDashboard();
@@ -19,7 +24,7 @@ export default async function DashboardPage() {
         <Stat label="Awaiting analysis" value={data.awaiting} highlight={data.awaiting > 0} />
         <Stat
           label="Served by fallback"
-          value={data.fallbackShare === undefined ? NONE : `${Math.round(data.fallbackShare * 100)}%`}
+          value={formatShare(data.fallbackShare)}
         />
         <Stat label="Failed" value={data.failed} />
       </div>
@@ -109,7 +114,7 @@ function Bar({
   barClass: string;
   mono?: boolean;
 }) {
-  const percent = of > 0 ? (count / of) * 100 : 0;
+  const percent = barPercent(count, of);
 
   return (
     <li>
@@ -125,20 +130,11 @@ function Bar({
 }
 
 function QueueHealth({ queue }: { queue: Dashboard['queue'] }) {
-  const { concurrency, medianLatencyMs } = queue;
-
   const rows: [string, string | number][] = [
     ['Workers online', queue.workersOnline],
-    [
-      'Concurrency each',
-      !concurrency
-        ? NONE
-        : concurrency.min === concurrency.max
-          ? concurrency.min
-          : `${concurrency.min}–${concurrency.max}`,
-    ],
+    ['Concurrency each', formatRange(queue.concurrency)],
     ['In flight', queue.inFlight],
-    ['Median latency', medianLatencyMs === undefined ? NONE : `${(medianLatencyMs / 1000).toFixed(1)}s`],
+    ['Median latency', formatLatency(queue.medianLatencyMs)],
     ['Retries, last 24h', queue.recentRetries],
   ];
 

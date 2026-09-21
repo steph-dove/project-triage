@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadWorkerConfig } from '../../lib/queue/config';
 import { Worker } from '../../lib/queue/worker';
 import {
@@ -153,14 +153,39 @@ describe('presence', () => {
     expect(writes).toEqual(['announce', 'retire']);
   });
 
-  it('keeps working when presence cannot be written', async () => {
+  it('keeps working when presence cannot be written, and still retires', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const store = new FakeStore([job()]);
     store.announce = async () => {
       throw new Error('database is locked');
     };
-    start(store, async () => ({ summary: 's', tags: [], risks: [], source: 'LLM' }));
+    const worker = start(store, async () => ({ summary: 's', tags: [], risks: [], source: 'LLM' }));
 
     await waitFor(() => store.completed.length > 0);
+    await worker.stop();
+
+    expect(errors).toHaveBeenCalledWith('[worker] could not record presence', expect.any(Error));
+    expect(store.retired).toBe(true);
+    errors.mockRestore();
+  });
+
+  it('never runs two presence writes at once', async () => {
+    const store = new FakeStore();
+    let inFlight = 0;
+    let most = 0;
+    store.announce = async () => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((r) => setTimeout(r, 40));
+      inFlight -= 1;
+    };
+
+    // A 10ms heartbeat against a 40ms write piles several up.
+    const worker = start(store, blockUntilAborted);
+    await new Promise((r) => setTimeout(r, 120));
+    await worker.stop();
+
+    expect(most).toBe(1);
   });
 });
 

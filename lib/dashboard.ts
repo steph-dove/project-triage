@@ -17,11 +17,12 @@ export async function getDashboard(now: Date = new Date()) {
   // Not a transaction: Prisma opens one on SQLite with BEGIN IMMEDIATE, which would hold the
   // write lock for the whole render and stall the workers. Total comes from the status groupBy
   // instead, so the bars and the headline still add up.
-  const [byStatus, byState, fallbacks, tags, workers, latencies, recentRetries] =
+  const [byStatus, bySource, tags, workers, latencies, recentRetries] =
     await Promise.all([
       db.intake.groupBy({ by: ['status'], _count: true }),
-      db.enrichment.groupBy({ by: ['state'], _count: true }),
-      db.enrichment.count({ where: { state: 'READY', source: 'FALLBACK' } }),
+      // State and source in one read, so the fallback share cannot be worked out from two
+      // counts taken either side of a result landing and read over 100%.
+      db.enrichment.groupBy({ by: ['state', 'source'], _count: true }),
       db.tag.groupBy({
         by: ['label'],
         _count: { label: true },
@@ -54,9 +55,12 @@ export async function getDashboard(now: Date = new Date()) {
 
   const total = byStatus.reduce((sum, row) => sum + row._count, 0);
 
-  const stateCount = (state: EnrichmentState) =>
-    byState.find((row) => row.state === state)?._count ?? 0;
+  const stateCount = (state: EnrichmentState, source?: string) =>
+    bySource
+      .filter((row) => row.state === state && (source === undefined || row.source === source))
+      .reduce((sum, row) => sum + row._count, 0);
   const ready = stateCount('READY');
+  const fallbacks = stateCount('READY', 'FALLBACK');
   const concurrencies = workers.map((w) => w.concurrency);
 
   return {
@@ -85,4 +89,25 @@ export function median(values: number[]): number | undefined {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+const NONE = '—';
+
+export function formatShare(share: number | undefined): string {
+  return share === undefined ? NONE : `${Math.round(share * 100)}%`;
+}
+
+export function formatRange(range: { min: number; max: number } | undefined): string {
+  if (!range) return NONE;
+  return range.min === range.max ? String(range.min) : `${range.min}–${range.max}`;
+}
+
+export function formatLatency(ms: number | undefined): string {
+  return ms === undefined ? NONE : `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Clamped because the counts behind a bar are separate reads, and a bar past its track spills
+// out of the card.
+export function barPercent(count: number, of: number): number {
+  return of > 0 ? Math.min(100, (count / of) * 100) : 0;
 }

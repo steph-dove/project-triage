@@ -53,6 +53,8 @@ export async function GET() {
 
     async pull(controller) {
       try {
+        // No transaction: on SQLite it's BEGIN IMMEDIATE and would stall the workers for the whole
+        // download. The cost is that a row finished mid-batch can pair new tags with old state.
         const batch = await db.intake.findMany({
           select,
           // id breaks createdAt ties, so the cursor never skips or repeats a row.

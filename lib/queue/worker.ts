@@ -101,9 +101,13 @@ export class Worker {
 
   private announce() {
     if (!this.running) return;
-    this.presence = this.store.announce(this.config.concurrency).catch((err) => {
-      console.error('[worker] could not record presence', err);
-    });
+    // Chained, so an upsert stuck behind a busy lock cannot land after a later one, or after the
+    // retire that stop() only runs once this chain has drained.
+    this.presence = this.presence
+      .then(() => this.store.announce(this.config.concurrency))
+      .catch((err) => {
+        console.error('[worker] could not record presence', err);
+      });
   }
 
   private async beat() {

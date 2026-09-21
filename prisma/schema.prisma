@@ -70,7 +70,7 @@ model Tag {
   label    String
 
   @@index([label])
-  // The export loads tags for 500 intakes per batch.
+  // The export loads tags per intake batch.
   @@index([intakeId])
 }
 

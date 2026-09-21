@@ -1,6 +1,14 @@
 import { PrismaClient } from '@prisma/client';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { getDashboard, median } from '../../lib/dashboard';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  barPercent,
+  formatLatency,
+  formatRange,
+  formatShare,
+  getDashboard,
+  median,
+} from '../../lib/dashboard';
+import { db as appDb } from '../../lib/db';
 
 const db = new PrismaClient();
 
@@ -134,5 +142,46 @@ describe('getDashboard', () => {
     });
 
     expect((await getDashboard(now)).queue.recentRetries).toBe(2);
+  });
+});
+
+describe('formatting', () => {
+  it('shows a dash for anything not measured yet', () => {
+    expect(formatShare(undefined)).toBe('—');
+    expect(formatRange(undefined)).toBe('—');
+    expect(formatLatency(undefined)).toBe('—');
+  });
+
+  it('rounds the share to a whole percent', () => {
+    expect(formatShare(0.25)).toBe('25%');
+    expect(formatShare(1 / 14)).toBe('7%');
+  });
+
+  it('collapses a range where every worker agrees', () => {
+    expect(formatRange({ min: 4, max: 4 })).toBe('4');
+    expect(formatRange({ min: 2, max: 4 })).toBe('2–4');
+  });
+
+  it('shows latency in seconds', () => {
+    expect(formatLatency(3_240)).toBe('3.2s');
+  });
+
+  it('keeps a bar inside its track', () => {
+    expect(barPercent(1, 4)).toBe(25);
+    expect(barPercent(5, 4)).toBe(100);
+    expect(barPercent(0, 0)).toBe(0);
+  });
+});
+
+describe('locking', () => {
+  // A transaction on SQLite is BEGIN IMMEDIATE, so wrapping these reads in one would stall the
+  // workers on every dashboard render.
+  it('reads without opening a transaction', async () => {
+    const transaction = vi.spyOn(appDb, '$transaction');
+
+    await getDashboard();
+
+    expect(transaction).not.toHaveBeenCalled();
+    transaction.mockRestore();
   });
 });

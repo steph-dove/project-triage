@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET } from '../../app/api/intakes/export.csv/route';
 import { BOM, csvCell, toCsv } from '../../lib/csv';
+import { db as appDb } from '../../lib/db';
 
 const db = new PrismaClient();
 
@@ -60,6 +61,22 @@ async function intake(title: string, description: string, extra: Record<string, 
       industry: 'Logistics',
       ...extra,
     },
+  });
+}
+
+async function seedMany(count: number) {
+  // Same createdAt for all of them, so only the id tiebreak keeps the cursor honest.
+  const createdAt = new Date();
+  await db.intake.createMany({
+    data: Array.from({ length: count }, (_, i) => ({
+      title: `Intake ${i}`,
+      description: 'A description long enough to be realistic.',
+      budgetRange: '$50k-100k',
+      timeline: '6 weeks',
+      industry: 'Logistics',
+      status: i % 2 === 0 ? 'NEW' : 'DECLINED',
+      createdAt,
+    })),
   });
 }
 
@@ -122,25 +139,48 @@ describe('GET /api/intakes/export.csv', () => {
   });
 
   it('exports every intake across batches, each exactly once', async () => {
-    // Same createdAt for all of them, so only the id tiebreak keeps the cursor honest.
-    const createdAt = new Date();
-    await db.intake.createMany({
-      data: Array.from({ length: 1_203 }, (_, i) => ({
-        title: `Intake ${i}`,
-        description: 'A description long enough to be realistic.',
-        budgetRange: '$50k-100k',
-        timeline: '6 weeks',
-        industry: 'Logistics',
-        status: i % 2 === 0 ? 'NEW' : 'DECLINED',
-        createdAt,
-      })),
-    });
+    await seedMany(1_203);
 
     const { rows } = await exported();
     const ids = rows.slice(1).map((row) => row[0]);
 
     expect(ids).toHaveLength(1_203);
     expect(new Set(ids).size).toBe(1_203);
+  });
+
+  it('closes cleanly when the last batch is exactly full', async () => {
+    await seedMany(1_000);
+
+    const { rows } = await exported();
+
+    expect(rows).toHaveLength(1_001);
+    expect(rows.every((row) => row.length === rows[0].length)).toBe(true);
+  });
+
+  it('exports just the header when there is nothing to export', async () => {
+    const { rows } = await exported();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0][0]).toBe('id');
+  });
+
+  it('fails the download, not truncates it, when a batch errors partway', async () => {
+    await seedMany(501);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const findMany = appDb.intake.findMany.bind(appDb.intake);
+    let calls = 0;
+    const spy = vi.spyOn(appDb.intake, 'findMany').mockImplementation(((args: never) => {
+      calls += 1;
+      return calls === 2 ? Promise.reject(new Error('database is locked')) : findMany(args);
+    }) as never);
+
+    // Erroring the stream is what makes the browser mark the download failed; a clean close
+    // here would save 500 rows as if they were the whole file.
+    await expect(new Response((await GET()).body).text()).rejects.toThrow('database is locked');
+    expect(calls).toBe(2);
+
+    spy.mockRestore();
+    errors.mockRestore();
   });
 
   it('writes the analysis alongside the intake, without the provider error', async () => {
@@ -172,6 +212,7 @@ describe('GET /api/intakes/export.csv', () => {
   });
 
   it('exports risks as stored when they are not a JSON list', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     for (const risks of ['not json', '{"a":1}']) {
       await intake(risks, 'A description long enough to be realistic.', {
         enrichment: { create: { state: 'READY', risks } },
@@ -182,6 +223,8 @@ describe('GET /api/intakes/export.csv', () => {
     const at = rows[0].indexOf('risks');
 
     expect(rows.slice(1).map((row) => row[at]).sort()).toEqual(['not json', '{"a":1}']);
+    expect(errors).toHaveBeenCalledOnce();
+    errors.mockRestore();
   });
 
   it('stops quietly when the download is cancelled mid-batch', async () => {
