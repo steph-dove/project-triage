@@ -138,8 +138,10 @@ the event stream.
 
 ### UX states
 
-- **Loading.** Skeleton routes for the list and detail pages, skeleton blocks for summary, tags
-  and risks while an analysis runs, and buttons that disable and relabel while they submit.
+- **Loading.** Skeleton blocks for the summary, tags and risks while an analysis runs, and
+  buttons that disable and relabel while they submit. There are no route-level skeletons: in a
+  production build `loading.tsx` made the router drop query-string navigations and refreshes, so
+  pages wait for the server render instead, which is one local SQLite query.
 - **Live progress.** The stage stepper, typed-out summary, and a note when an attempt failed and
   is queued to go again. Progress is announced to screen readers through a polite live region.
 - **Empty.** "No intakes yet" with a link to create the first one, and a separate "No intakes
@@ -164,8 +166,11 @@ the event stream.
 - Wrote tests alongside each phase, and for every bug fix a test that fails without the fix. I
   checked the important ones by removing the fix and watching the test go red.
 - Drove every flow in a real browser against the mock provider at desktop, tablet and phone
-  widths: create, list, filter, paginate, detail, status changes, retry, dashboard, export. Every
-  `FORCE_AI_FAILURE` mode, to see each banner.
+  widths: create, list, filter, paginate, detail, status changes, retry, dashboard, export, plus
+  `FORCE_AI_FAILURE` to bring up the fallback and failure banners.
+- Ran the e2e specs repeatedly against a production build, which is where the dropped-navigation
+  bug showed up (`next dev` never shows it). After removing the loading boundaries, 60 of 60 list
+  runs and 30 of 30 retry runs passed.
 - Stopped a worker with SIGTERM mid-run and checked it drained, handed its jobs back and dropped
   off the dashboard. The crash path (a lease that lapses under a dead worker) is covered by the
   queue tests, including two workers racing for the same job.
@@ -174,24 +179,38 @@ the event stream.
 
 ### Tests
 
-156 tests across 17 files, run with Vitest against a real SQLite database (`data/test.db`,
-recreated from the migrations on every run).
+Two suites. Vitest runs unit and integration tests against a real SQLite database
+(`data/test.db`, recreated from the migrations on every run). Playwright drives the app in
+Chromium against a production build, a separate `data/e2e.db` and a real worker process on the
+mock provider.
 
 ```bash
-npm test             # the suite
-npm run typecheck    # tsc --noEmit
-npm run lint         # eslint
+npm test                          # Vitest
+npx playwright install chromium   # once, before the first e2e run
+npm run test:e2e                  # Playwright, builds and serves on port 3217 (E2E_PORT to move it)
+npm run typecheck                 # tsc --noEmit
+npm run lint                      # eslint
 ```
 
-They cover:
+The e2e run sets its own env, so a `.env` with `WORKER_IN_PROCESS=true` or a real OpenAI key
+doesn't leak into it. Its specs (`tests/e2e`) cover the happy path from the form to a finished
+analysis, a list card updating itself live, both empty states, field-by-field validation, the
+404, a hard failure recovered by Retry, and page 2 surviving a reload.
+
+The Vitest suite covers:
 
 - **Queue** (`tests/queue`): claiming (one winner when two workers race), leases and heartbeats,
   the expired-lease sweep, fencing so a worker that lost its lease can't write a result, retry
   backoff, handing jobs back on shutdown, worker presence, config validation.
 - **AI** (`tests/ai`): error classification, partial summary parsing from a stream, guardrails, the
   heuristic fallback, the enrichment processor end to end with a stubbed provider, config
-  validation.
-- **API** (`tests/api`): the retry endpoint, where the event stream resumes from, and the CSV
+  validation, and the eval dump.
+- **Durable retry** (`tests/queue/durable-retry.test.ts`): a retriable failure going back through
+  the database and succeeding on the third attempt, running out of attempts and saving the
+  fallback, and a worker that keeps going after a job blows up.
+- **API** (`tests/api`): creating an intake (201 with its job and QUEUED event, trimming, a
+  message per bad field, non-JSON bodies), pagination boundaries with and without a filter, the
+  retry endpoint, where the event stream resumes from, and the CSV
   export (quoting, formula injection, BOM, batching over 1,000 rows, a failure mid-download, a
   cancelled download).
 - **UI logic** (`tests/ui`): list pagination and filtering, the stepper's state machine, stream
@@ -216,5 +235,7 @@ With `WORKER_IN_PROCESS=true AI_PROVIDER=mock npm run dev` and the seed loaded:
 - [ ] Open the dashboard. Totals match the list, and one worker is online.
 - [ ] Export the CSV from the list. It opens in a spreadsheet with one row per intake and a
       description containing a comma stays in one cell.
+- [ ] Run `npm run eval:dump`. It writes every finished analysis (input, raw response, saved
+      result, latency and tokens) to `evals/runs-<timestamp>.jsonl` for scoring.
 - [ ] With an empty database (`rm data/dev.db*`, then `npm run db:deploy`), the list shows
       "No intakes yet".
