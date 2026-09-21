@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { ExportButton } from '@/components/export-button';
 import { NoFilterMatches, NoIntakesYet } from '@/components/empty-states';
 import { IntakeCard } from '@/components/intake-card';
 import { FilterChips, Pagination } from '@/components/list-controls';
@@ -28,7 +29,10 @@ export default async function IntakeListPage({ searchParams }: { searchParams: S
       />
 
       {list.totalAll > 0 && (
-        <FilterChips counts={list.counts} totalAll={list.totalAll} active={query.status} />
+        <div className="flex items-start justify-between gap-4">
+          <FilterChips counts={list.counts} totalAll={list.totalAll} active={query.status} />
+          <ExportButton className="hidden shrink-0 sm:block" />
+        </div>
       )}
 
       {list.totalAll === 0 && <NoIntakesYet />}

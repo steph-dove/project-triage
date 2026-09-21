@@ -117,6 +117,12 @@ export async function requeueIntake(db: PrismaClient, intakeId: string): Promise
   });
 }
 
+// Beside announce() because the two halves of "online" have to agree: announce sets expiresAt a
+// lease ahead, and this counts whoever has not run out yet.
+export function liveWorkers(db: PrismaClient, now = new Date()) {
+  return db.worker.findMany({ where: { expiresAt: { gt: now } }, select: { concurrency: true } });
+}
+
 export class SqliteJobStore implements JobStore {
   constructor(
     private readonly db: PrismaClient,
@@ -271,6 +277,25 @@ export class SqliteJobStore implements JobStore {
       },
     });
     return result.count === 1;
+  }
+
+  async announce(concurrency: number): Promise<void> {
+    const now = Date.now();
+    const expiresAt = new Date(now + this.leaseMs);
+
+    await this.db.$transaction([
+      // A live worker renews well inside its lease, so anything past it crashed without retiring.
+      this.db.worker.deleteMany({ where: { expiresAt: { lt: new Date(now) } } }),
+      this.db.worker.upsert({
+        where: { id: this.workerId },
+        create: { id: this.workerId, concurrency, expiresAt },
+        update: { concurrency, expiresAt },
+      }),
+    ]);
+  }
+
+  async retire(): Promise<void> {
+    await this.db.worker.deleteMany({ where: { id: this.workerId } });
   }
 
   // No coordinator: a dead worker stops extending its lease, whoever notices first resets it.

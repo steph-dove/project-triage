@@ -58,6 +58,10 @@ export interface JobStore {
   fail(enrichmentId: string, lockToken: string, outcome: FailureOutcome): Promise<boolean>;
   release(enrichmentId: string, lockToken: string): Promise<boolean>;
   reap(): Promise<number>;
+  // Presence for the dashboard. Renewed on the heartbeat timer, so a crashed worker drops off
+  // once its lease length passes.
+  announce(concurrency: number): Promise<void>;
+  retire(): Promise<void>;
   subscribe(sinceSeq: number, handlers: SubscribeHandlers): Subscription;
 }
 
