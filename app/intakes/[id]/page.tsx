@@ -186,12 +186,18 @@ function RiskChecklist({ risks }: { risks: string[] }) {
 }
 
 function FallbackBanner({ enrichment }: { enrichment: Enrichment }) {
+  // A fallback can be written without the model ever having been called, and "did not respond
+  // after 0 attempts" reads as a bug rather than as an explanation.
+  const cause =
+    enrichment.attempts > 0
+      ? `The model did not respond after ${attemptCount(enrichment.attempts)}.`
+      : 'The model did not produce a result.';
+
   return (
     <div className="rounded-md bg-amber px-4 py-3 text-amber-ink">
       <p className="font-semibold">AI unavailable — showing basic analysis</p>
       <p className="mt-1 text-sm">
-        The model did not respond after {attemptCount(enrichment.attempts)}. Tags and risks
-        below were derived from the submitted fields.
+        {cause} Tags and risks below were derived from the submitted fields.
       </p>
     </div>
   );
@@ -210,20 +216,17 @@ function FailureBanner({ enrichment }: { enrichment: Enrichment }) {
 }
 
 function Instrumentation({ enrichment }: { enrichment: Enrichment }) {
+  const attempts = enrichment.attempts > 0 && attemptCount(enrichment.attempts);
   const parts =
     enrichment.state === 'FAILED'
-      ? ['state: FAILED', attemptCount(enrichment.attempts), enrichment.error]
+      ? ['state: FAILED', attempts, enrichment.error]
       : enrichment.source === 'FALLBACK'
-        ? [
-            'source: fallback',
-            attemptCount(enrichment.attempts),
-            enrichment.error && `last error: ${enrichment.error}`,
-          ]
+        ? ['source: fallback', attempts, enrichment.error && `last error: ${enrichment.error}`]
         : [
             enrichment.model,
             enrichment.promptVersion && `prompt ${enrichment.promptVersion}`,
             enrichment.latencyMs !== null && `${(enrichment.latencyMs / 1000).toFixed(1)}s`,
-            attemptCount(enrichment.attempts),
+            attempts,
           ];
 
   const line = parts.filter(Boolean).join(' · ');

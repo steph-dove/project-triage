@@ -69,49 +69,45 @@ export function CreateIntakeForm() {
       <h1 className="font-serif text-3xl">New intake</h1>
 
       <div className="mt-6 space-y-5">
-        <Field label="Title" error={errors.title}>
-          <input
-            type="text"
-            value={values.title}
-            onChange={update('title')}
-            className={inputClass(errors.title)}
-          />
-        </Field>
+        <TextField
+          name="title"
+          label="Title"
+          value={values.title}
+          error={errors.title}
+          onChange={update('title')}
+        />
 
-        <Field label="Description" error={errors.description}>
-          <textarea
-            rows={4}
-            value={values.description}
-            onChange={update('description')}
-            className={inputClass(errors.description)}
-          />
-        </Field>
+        <TextField
+          name="description"
+          label="Description"
+          rows={4}
+          value={values.description}
+          error={errors.description}
+          onChange={update('description')}
+        />
 
         <div className="grid gap-5 sm:grid-cols-3">
-          <Field label="Budget range" error={errors.budgetRange}>
-            <input
-              type="text"
-              value={values.budgetRange}
-              onChange={update('budgetRange')}
-              className={inputClass(errors.budgetRange)}
-            />
-          </Field>
-          <Field label="Timeline" error={errors.timeline}>
-            <input
-              type="text"
-              value={values.timeline}
-              onChange={update('timeline')}
-              className={inputClass(errors.timeline)}
-            />
-          </Field>
-          <Field label="Industry" error={errors.industry}>
-            <input
-              type="text"
-              value={values.industry}
-              onChange={update('industry')}
-              className={inputClass(errors.industry)}
-            />
-          </Field>
+          <TextField
+            name="budgetRange"
+            label="Budget range"
+            value={values.budgetRange}
+            error={errors.budgetRange}
+            onChange={update('budgetRange')}
+          />
+          <TextField
+            name="timeline"
+            label="Timeline"
+            value={values.timeline}
+            error={errors.timeline}
+            onChange={update('timeline')}
+          />
+          <TextField
+            name="industry"
+            label="Industry"
+            value={values.industry}
+            error={errors.industry}
+            onChange={update('industry')}
+          />
         </div>
       </div>
 
@@ -140,26 +136,51 @@ export function CreateIntakeForm() {
   );
 }
 
-function Field({
+function TextField({
+  name,
   label,
+  value,
   error,
-  children,
+  rows,
+  onChange,
 }: {
+  name: Field;
   label: string;
+  value: string;
   error?: string;
-  children: React.ReactNode;
+  rows?: number;
+  onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
 }) {
+  const errorId = `${name}-error`;
+  const className = `w-full rounded-md border bg-card px-3 py-2.5 text-sm ${
+    error ? 'border-clay-ink' : 'border-line'
+  }`;
+  const shared = {
+    id: name,
+    name,
+    value,
+    onChange,
+    className,
+    'aria-invalid': error ? true : undefined,
+    'aria-describedby': error ? errorId : undefined,
+  };
+
   return (
-    <label className="block">
-      <span className="text-sm font-semibold">{label}</span>
-      <span className="mt-1.5 block">{children}</span>
-      {error && <span className="mt-1.5 block text-sm text-clay-ink">{error}</span>}
-    </label>
+    <div>
+      <label htmlFor={name} className="text-sm font-semibold">
+        {label}
+      </label>
+      <div className="mt-1.5">
+        {rows ? <textarea rows={rows} {...shared} /> : <input type="text" {...shared} />}
+      </div>
+      {error && (
+        <p id={errorId} className="mt-1.5 text-sm text-clay-ink">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
-
-const inputClass = (error?: string) =>
-  `w-full rounded-md border bg-card px-3 py-2.5 text-sm ${error ? 'border-clay-ink' : 'border-line'}`;
 
 // Zod hands back every failure per field; the first one is the one worth acting on.
 function firstMessages(fieldErrors: Partial<Record<string, string[]>>): Errors {
