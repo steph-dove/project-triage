@@ -1,0 +1,89 @@
+// SQLite relative paths in DATABASE_URL resolve against THIS directory, not the repo root.
+// That is why the default url is `file:../data/dev.db` — it lands the database at <repo>/data.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Intake {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  budgetRange String
+  timeline    String
+  industry    String
+  status      String   @default("NEW") // NEW | IN_REVIEW | ACCEPTED | DECLINED
+  createdAt   DateTime @default(now())
+
+  enrichment Enrichment?
+  tags       Tag[]
+  events     Event[]
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+// The job record and the AI result live in the same row. Writing it is the enqueue; there is no
+// separate queue table to drift out of sync with the domain.
+model Enrichment {
+  id       String @id @default(cuid())
+  intakeId String @unique
+  intake   Intake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+
+  state    String  @default("PENDING") // PENDING | PROCESSING | READY | FAILED
+  summary  String?
+  risks    String? // JSON array
+  source   String? // LLM | FALLBACK
+  model    String?
+  attempts Int     @default(0)
+  error    String?
+
+  // queue coordination
+  nextAttemptAt  DateTime  @default(now())
+  lockedBy       String? // worker id, for debugging
+  lockToken      String? // fencing token — stale workers cannot write
+  leaseExpiresAt DateTime?
+
+  // instrumentation, so prompt quality can be reviewed after the build rather than guessed at
+  promptVersion String?
+  rawResponse   String?
+  latencyMs     Int?
+  tokensIn      Int?
+  tokensOut     Int?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([state, leaseExpiresAt])
+}
+
+// Rows rather than a JSON blob, so the dashboard can groupBy instead of counting in memory.
+model Tag {
+  id       String @id @default(cuid())
+  intakeId String
+  intake   Intake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  label    String
+
+  @@index([label])
+}
+
+// Append-only. `seq` doubles as the SSE resume cursor, so a dropped connection reconnects with
+// Last-Event-ID and misses nothing.
+model Event {
+  seq      Int    @id @default(autoincrement())
+  intakeId String
+  intake   Intake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+
+  type      String // QUEUED | CLAIMED | CALLING_MODEL | PARTIAL | VALIDATING
+  //        | READY | FAILED | FALLBACK | RETRY_SCHEDULED | STATUS_CHANGED
+  payload   String? // JSON
+  createdAt DateTime @default(now())
+
+  @@index([intakeId, seq])
+  @@index([seq])
+}
