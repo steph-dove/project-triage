@@ -1,8 +1,10 @@
 import { notFound } from 'next/navigation';
-import { AutoRefresh } from '@/components/auto-refresh';
-import { PendingPill, Skeleton, TagChip } from '@/components/badges';
+import { Block } from '@/components/analysis-blocks';
+import { TagChip } from '@/components/badges';
 import { BackToIntakes } from '@/components/back-link';
-import { getIntake, isAnalysing, type SerializedIntake } from '@/lib/intakes';
+import { LiveAnalysis } from '@/components/live-analysis';
+import { RetryButton } from '@/components/retry-button';
+import { getIntake, type SerializedIntake } from '@/lib/intakes';
 import { relativeTime } from '@/lib/time';
 import { StatusButtons } from './status-buttons';
 
@@ -21,7 +23,6 @@ export default async function IntakeDetailPage({
 
   return (
     <div className="space-y-6">
-      <AutoRefresh enabled={isAnalysing(intake.enrichment)} />
       <BackToIntakes />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -32,7 +33,7 @@ export default async function IntakeDetailPage({
       <div className="grid gap-6 lg:grid-cols-3">
         <SubmittedRequest intake={intake} />
         <div className="rounded-lg border border-line bg-card p-6 lg:col-span-2">
-          <TriageAnalysis enrichment={intake.enrichment} tags={intake.tags} />
+          <TriageAnalysis intake={intake} />
         </div>
       </div>
     </div>
@@ -68,18 +69,18 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function TriageAnalysis({ enrichment, tags }: { enrichment: Enrichment | null; tags: string[] }) {
+function TriageAnalysis({ intake }: { intake: SerializedIntake }) {
+  const { enrichment, tags, id } = intake;
+
   if (!enrichment) {
-    return (
-      <p className="text-sm text-muted">No analysis has been queued for this intake.</p>
-    );
+    return <p className="text-sm text-muted">No analysis has been queued for this intake.</p>;
   }
 
-  // Narrowed rather than tested, so PendingPill gets the state without a cast.
-  const pending =
-    enrichment.state === 'PENDING' || enrichment.state === 'PROCESSING'
-      ? enrichment.state
-      : undefined;
+  // A run in flight is the stepper's, header and all: it has its own elapsed clock where the
+  // finished states have a badge.
+  if (enrichment.state === 'PENDING' || enrichment.state === 'PROCESSING') {
+    return <LiveAnalysis intakeId={id} />;
+  }
 
   return (
     <>
@@ -87,15 +88,18 @@ function TriageAnalysis({ enrichment, tags }: { enrichment: Enrichment | null; t
         <h2 className="font-mono text-xs tracking-widest text-faint uppercase">
           Triage analysis
         </h2>
-        {pending ? <PendingPill state={pending} /> : <StateBadge state={enrichment.state} />}
+        <StateBadge state={enrichment.state} />
       </div>
 
       <div className="mt-5 space-y-5">
-        {pending && <AnalysingBody />}
-        {enrichment.state === 'FAILED' && <FailureBanner enrichment={enrichment} />}
+        {enrichment.state === 'FAILED' && (
+          <FailureBanner intakeId={id} enrichment={enrichment} />
+        )}
         {enrichment.state === 'READY' && (
           <>
-            {enrichment.source === 'FALLBACK' && <FallbackBanner enrichment={enrichment} />}
+            {enrichment.source === 'FALLBACK' && (
+              <FallbackBanner intakeId={id} enrichment={enrichment} />
+            )}
             <Block label="Summary">
               <p className="leading-relaxed">{enrichment.summary}</p>
             </Block>
@@ -113,7 +117,7 @@ function TriageAnalysis({ enrichment, tags }: { enrichment: Enrichment | null; t
         )}
       </div>
 
-      {!pending && <Instrumentation enrichment={enrichment} />}
+      <Instrumentation enrichment={enrichment} />
     </>
   );
 }
@@ -126,44 +130,6 @@ function StateBadge({ state }: { state: Enrichment['state'] }) {
     >
       {failed ? 'Failed' : 'Ready'}
     </span>
-  );
-}
-
-function Block({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h3 className="text-sm font-semibold">{label}</h3>
-      <div className="mt-2">{children}</div>
-    </section>
-  );
-}
-
-// Sized to a finished analysis so the panel keeps its height when the result lands.
-function AnalysingBody() {
-  return (
-    <>
-      <Block label="Summary">
-        <div className="space-y-2">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-11/12" />
-          <Skeleton className="h-4 w-3/4" />
-        </div>
-      </Block>
-      <Block label="Tags">
-        <div className="flex gap-2">
-          <Skeleton className="h-7 w-28" />
-          <Skeleton className="h-7 w-24" />
-          <Skeleton className="h-7 w-20" />
-        </div>
-      </Block>
-      <Block label="Risk checklist">
-        <div className="space-y-2">
-          <Skeleton className="h-5 w-full" />
-          <Skeleton className="h-5 w-10/12" />
-          <Skeleton className="h-5 w-8/12" />
-        </div>
-      </Block>
-    </>
   );
 }
 
@@ -193,7 +159,7 @@ function RiskChecklist({ risks }: { risks: string[] }) {
   );
 }
 
-function FallbackBanner({ enrichment }: { enrichment: Enrichment }) {
+function FallbackBanner({ intakeId, enrichment }: { intakeId: string; enrichment: Enrichment }) {
   // A fallback can be written without the model ever having been called, and "did not respond
   // after 0 attempts" reads as a bug rather than as an explanation.
   const cause =
@@ -203,22 +169,32 @@ function FallbackBanner({ enrichment }: { enrichment: Enrichment }) {
 
   return (
     <div className="rounded-md bg-amber px-4 py-3 text-amber-ink">
-      <p className="font-semibold">AI unavailable — showing basic analysis</p>
-      <p className="mt-1 text-sm">
-        {cause} Tags and risks below were derived from the submitted fields.
-      </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="font-semibold">AI unavailable — showing basic analysis</p>
+          <p className="mt-1 text-sm">
+            {cause} Tags and risks below were derived from the submitted fields.
+          </p>
+        </div>
+        <RetryButton intakeId={intakeId} tone="fallback" />
+      </div>
     </div>
   );
 }
 
-function FailureBanner({ enrichment }: { enrichment: Enrichment }) {
+function FailureBanner({ intakeId, enrichment }: { intakeId: string; enrichment: Enrichment }) {
   return (
     <div role="alert" className="rounded-md bg-clay px-4 py-3 text-clay-ink">
-      <p className="font-semibold">Analysis failed</p>
-      <p className="mt-1 text-sm">
-        The intake is saved and safe. Nothing was generated for it yet.
-        {enrichment.attempts > 0 && ` Tried ${attemptCount(enrichment.attempts)}.`}
-      </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="font-semibold">Analysis failed</p>
+          <p className="mt-1 text-sm">
+            The intake is saved and safe. Nothing was generated for it yet.
+            {enrichment.attempts > 0 && ` Tried ${attemptCount(enrichment.attempts)}.`}
+          </p>
+        </div>
+        <RetryButton intakeId={intakeId} tone="failed" />
+      </div>
     </div>
   );
 }

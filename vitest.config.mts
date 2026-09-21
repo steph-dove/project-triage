@@ -1,6 +1,11 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // The route handlers import through the same `@/` alias tsconfig gives the app.
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('.', import.meta.url)) },
+  },
   test: {
     globalSetup: './tests/global-setup.ts',
     // The suite shares one SQLite file and asserts on row state, so files cannot overlap.
