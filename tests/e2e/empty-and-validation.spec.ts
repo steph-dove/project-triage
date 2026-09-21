@@ -54,3 +54,10 @@ test('the form refuses an incomplete intake field by field', async ({ page }) =>
 
   expect(await db.intake.count()).toBe(0);
 });
+
+test('an intake that does not exist is a real 404', async ({ page }) => {
+  const response = await page.goto('/intakes/does-not-exist');
+
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole('heading', { name: 'No intake with that id' })).toBeVisible();
+});
