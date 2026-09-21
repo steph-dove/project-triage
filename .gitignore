@@ -2,7 +2,7 @@
 .claude/settings.local.json
 
 # Local planning scratch (klaussy plan skill)
-plan.md
+/plan.md
 
 # dependencies
 /node_modules
