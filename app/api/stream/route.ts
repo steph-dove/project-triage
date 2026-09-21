@@ -1,7 +1,13 @@
 import { db } from '@/lib/db';
 import { tailEvents } from '@/lib/queue/sqlite-store';
 import { resolveCursor } from '@/lib/stream-cursor';
-import { encodeFrame, HEARTBEAT_MS, type StreamEvent } from '@/lib/stream';
+import {
+  encodeFrame,
+  HEARTBEAT_MS,
+  LIST_EVENTS,
+  projectPayload,
+  type StreamEvent,
+} from '@/lib/stream';
 
 // Prisma and the tail's timers both need Node, and a cached stream is not a stream.
 export const runtime = 'nodejs';
@@ -9,9 +15,39 @@ export const dynamic = 'force-dynamic';
 
 const MAX_TAIL_FAILURES = 5;
 
+// Each stream runs its own 250ms tail; browsers cap at six per origin, so this only bounds abuse.
+const MAX_OPEN_STREAMS = 64;
+
+let openStreams = 0;
+
 export async function GET(request: Request) {
-  const intakeId = new URL(request.url).searchParams.get('intakeId') ?? undefined;
-  const sinceSeq = await resolveCursor(request, intakeId);
+  // Claimed before the first await: a check and increment either side of one would let requests
+  // arriving during the cursor query pass a gate that is already full.
+  if (openStreams >= MAX_OPEN_STREAMS) {
+    return new Response('Too many open streams.', {
+      status: 503,
+      headers: { 'Retry-After': '5' },
+    });
+  }
+  openStreams += 1;
+
+  try {
+    return await openStream(request);
+  } catch (err) {
+    // Only reached if the stream was never handed back, so close() will not run to release it.
+    openStreams -= 1;
+    throw err;
+  }
+}
+
+async function openStream(request: Request): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const intakeId = params.get('intakeId') ?? undefined;
+  const sinceSeq = await resolveCursor(request, { intakeId, sinceSeq: params.get('sinceSeq') });
+
+  // The list page is the only caller that leaves intakeId off, and it redraws on state changes.
+  // Filtering at the query means a PARTIAL per token per in-flight job is never sent to it.
+  const types = intakeId ? undefined : LIST_EVENTS;
 
   const encoder = new TextEncoder();
   let subscription: { stop: () => void } | undefined;
@@ -35,6 +71,7 @@ export async function GET(request: Request) {
       const close = () => {
         if (closed) return;
         closed = true;
+        openStreams -= 1;
         subscription?.stop();
         if (heartbeat) clearInterval(heartbeat);
         try {
@@ -49,7 +86,7 @@ export async function GET(request: Request) {
 
       subscription = tailEvents(
         db,
-        { sinceSeq, intakeId },
+        { sinceSeq, intakeId, types },
         {
           onEvent: (event) => send(encodeFrame(toStreamEvent(event))),
           onError: (_err, consecutiveFailures) => {
@@ -88,11 +125,13 @@ function toStreamEvent(row: {
   payload: string | null;
   createdAt: Date;
 }): StreamEvent {
+  const type = row.type as StreamEvent['type'];
+
   return {
     seq: row.seq,
     intakeId: row.intakeId,
-    type: row.type as StreamEvent['type'],
-    payload: parsePayload(row.payload),
+    type,
+    payload: projectPayload(type, parsePayload(row.payload)),
     createdAt: row.createdAt.toISOString(),
   };
 }

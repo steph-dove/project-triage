@@ -33,13 +33,20 @@ function useTypewriter(text: string) {
       return;
     }
 
-    // A retry replaces the summary rather than extending it, so start over.
+    // Hold position as the summary grows, and only trim if a replacement comes back shorter.
+    // Restarting on every PARTIAL would retype the whole thing three times a second.
     setCount((current) => Math.min(current, text.length));
 
     const timer = setInterval(() => {
       setCount((current) => {
-        if (current >= text.length) return current;
-        return Math.min(text.length, current + Math.max(1, Math.ceil((text.length - current) / CATCH_UP)));
+        if (current >= text.length) {
+          clearInterval(timer);
+          return current;
+        }
+        return Math.min(
+          text.length,
+          current + Math.max(1, Math.ceil((text.length - current) / CATCH_UP)),
+        );
       });
     }, TICK_MS);
 

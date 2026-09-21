@@ -36,7 +36,7 @@ export function StageStepper({ state }: { state: StreamState }) {
             {index > 0 && (
               <span
                 aria-hidden
-                className={`mt-3 h-px min-w-6 flex-1 ${
+                className={`mt-3 h-px min-w-2 flex-1 sm:min-w-6 ${
                   nodeState(state, STAGES[index - 1]) === 'done' ? 'bg-ink' : 'bg-line'
                 }`}
               />
@@ -68,7 +68,9 @@ function StageNode({ state, stage, now }: { state: StreamState; stage: Stage; no
   const elapsed = elapsedMs(state.stages[stage], now);
 
   return (
-    <div className="flex w-20 shrink-0 flex-col items-center gap-1.5 text-center">
+    // Narrower than the wireframe below sm, or four stages plus their connectors do not fit
+    // inside the card on a phone and the whole panel scrolls sideways.
+    <div className="flex w-14 shrink-0 flex-col items-center gap-1.5 text-center sm:w-20">
       <span
         aria-hidden
         className={`flex size-6 items-center justify-center rounded-full border text-xs ${NODE_STYLES[status]}`}
@@ -76,7 +78,7 @@ function StageNode({ state, stage, now }: { state: StreamState; stage: Stage; no
         {status === 'done' && '✓'}
         {status === 'failed' && '!'}
       </span>
-      <span className={`text-sm ${LABEL_STYLES[status]}`}>{STAGE_LABELS[stage]}</span>
+      <span className={`text-xs sm:text-sm ${LABEL_STYLES[status]}`}>{STAGE_LABELS[stage]}</span>
 
       {status === 'running' && <span className="font-mono text-xs text-rust">running</span>}
       {status === 'failed' && <span className="font-mono text-xs text-clay-ink">failed</span>}
@@ -105,7 +107,8 @@ function totalMs(state: StreamState, now: number): number | undefined {
   if (startedAt === undefined) return undefined;
 
   const endedAt = state.outcome === 'running' ? now : (lastTimestamp(state) ?? now);
-  return endedAt - startedAt;
+  // Negative means the viewer's clock is behind the server's; see elapsedMs.
+  return endedAt < startedAt ? undefined : endedAt - startedAt;
 }
 
 function lastTimestamp(state: StreamState): number | undefined {
@@ -122,7 +125,7 @@ function announcement(state: StreamState): string {
   return `${STAGE_LABELS[state.current]}.`;
 }
 
-const seconds = (ms: number) => `${(Math.max(ms, 0) / 1000).toFixed(1)}s`;
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
 function useNow(running: boolean) {
   const [now, setNow] = useState(() => Date.now());

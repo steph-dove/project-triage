@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
-import { emit } from '../events';
+import { emit, type EventType } from '../events';
 import type {
   ClaimedJob,
   EnrichmentResult,
@@ -20,13 +20,15 @@ export type TailOptions = {
   sinceSeq: number;
   // The SSE route serves one detail page at a time; the worker wants everything.
   intakeId?: string;
+  // Narrows at the query, so frames the caller would discard are never built or sent.
+  types?: readonly EventType[];
 };
 
 // Outside the store because the stream endpoint needs the same tail, and handing it a job store
 // built with a made-up worker id would misrepresent what the object is.
 export function tailEvents(
   db: PrismaClient,
-  { sinceSeq, intakeId }: TailOptions,
+  { sinceSeq, intakeId, types }: TailOptions,
   { onEvent, onError }: SubscribeHandlers,
 ): Subscription {
   let cursor = sinceSeq;
@@ -39,7 +41,11 @@ export function tailEvents(
 
     try {
       const rows = await db.event.findMany({
-        where: { seq: { gt: cursor }, ...(intakeId ? { intakeId } : {}) },
+        where: {
+          seq: { gt: cursor },
+          ...(intakeId ? { intakeId } : {}),
+          ...(types ? { type: { in: [...types] } } : {}),
+        },
         orderBy: { seq: 'asc' },
         take: 200,
       });
@@ -79,6 +85,37 @@ export const releasedLock = {
   lockToken: null,
   leaseExpiresAt: null,
 } as const;
+
+/**
+ * Puts a finished enrichment back on the queue and announces it on the stream.
+ *
+ * Lives here rather than in the route handler because the enrichment row is the job record:
+ * which columns say "claimable" is the queue's business, and the Postgres adapter would have
+ * to change it in step. Returns false when the row is already PENDING or PROCESSING, which is
+ * how an impatient double-click gets turned away.
+ */
+export async function requeueIntake(db: PrismaClient, intakeId: string): Promise<boolean> {
+  return db.$transaction(async (tx) => {
+    // Compare-and-swap rather than a read then a write: two clicks arriving together would
+    // both pass a separate check and queue the same work twice.
+    const { count } = await tx.enrichment.updateMany({
+      where: { intakeId, state: { in: ['READY', 'FAILED'] } },
+      // summary, risks and tags are deliberately untouched. A retry that ends in a hard failure
+      // would otherwise destroy a usable fallback result, and the detail page still shows it.
+      data: {
+        state: 'PENDING',
+        attempts: 0,
+        error: null,
+        nextAttemptAt: new Date(),
+        ...releasedLock,
+      },
+    });
+    if (count === 0) return false;
+
+    await emit(tx, intakeId, 'QUEUED', { retry: true });
+    return true;
+  });
+}
 
 export class SqliteJobStore implements JobStore {
   constructor(

@@ -87,11 +87,28 @@ describe('reduceStream', () => {
 
   it('keeps the last summary when a later event carries no payload', () => {
     const state = run([
+      event('QUEUED', 0),
+      event('CLAIMED', 50),
       event('PARTIAL', 100, { summary: 'half a sentence' }),
       event('PARTIAL', 200, {}),
     ]);
 
     expect(state.summary).toBe('half a sentence');
+  });
+
+  it('drops a partial that lands after the run it belonged to was requeued', () => {
+    // PARTIAL is the one event the worker writes unfenced, so a worker that lost its lease can
+    // still commit one after the next attempt has started.
+    const state = run([
+      event('QUEUED', 0),
+      event('CLAIMED', 50),
+      event('PARTIAL', 100, { summary: 'from the attempt that died' }),
+      event('RETRY_SCHEDULED', 200, { error: 'lease expired' }),
+      event('PARTIAL', 250, { summary: 'from the attempt that died' }),
+    ]);
+
+    expect(state.current).toBe('QUEUED');
+    expect(state.summary).toBeUndefined();
   });
 
   it('ignores events that say nothing about progress', () => {
@@ -121,5 +138,11 @@ describe('elapsedMs', () => {
 
   it('counts an open stage up to now', () => {
     expect(elapsedMs({ enteredAt: T0 }, T0 + 1_500)).toBe(1_500);
+  });
+
+  it('reports nothing rather than a wrong number when the viewer clock is behind', () => {
+    // A finished stage has both ends from the event log. A running one does not, so a device a
+    // minute slow would otherwise show a confident 0.0s that never moves.
+    expect(elapsedMs({ enteredAt: T0 }, T0 - 60_000)).toBeUndefined();
   });
 });

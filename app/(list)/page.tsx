@@ -22,7 +22,10 @@ export default async function IntakeListPage({ searchParams }: { searchParams: S
 
   return (
     <div className="space-y-6 pb-24 sm:pb-0">
-      <ListStream enabled={list.items.some((intake) => isAnalysing(intake.enrichment))} />
+      <ListStream
+        enabled={list.items.some((intake) => isAnalysing(intake.enrichment))}
+        sinceSeq={list.sinceSeq}
+      />
 
       {list.totalAll > 0 && (
         <FilterChips counts={list.counts} totalAll={list.totalAll} active={query.status} />

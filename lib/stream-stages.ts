@@ -53,7 +53,11 @@ export function reduceStream(state: StreamState, event: StreamEvent): StreamStat
             stages: { ...close(state.stages, 'QUEUED', at), ANALYSING: { enteredAt: at } },
           };
 
+    // The only event the worker writes unfenced and fire-and-forget, so one issued by a worker
+    // that then lost its lease can commit after the next run's QUEUED. Ignoring it outside
+    // ANALYSING stops last attempt's half-sentence appearing under a stepper that just reset.
     case 'PARTIAL':
+      if (state.current !== 'ANALYSING') return state;
       return { ...state, summary: field(event.payload, 'summary') ?? state.summary };
 
     case 'VALIDATING':
@@ -94,11 +98,20 @@ export function reduceStream(state: StreamState, event: StreamEvent): StreamStat
   }
 }
 
-// Undefined for a stage that has not started, so the stepper can tell "not reached" from
-// "took no measurable time".
+/**
+ * Undefined for a stage that has not started, so the stepper can tell "not reached" from "took
+ * no measurable time".
+ *
+ * Also undefined when the answer comes out negative. A finished stage has both ends from the
+ * event log and is always right, but a running one is the browser's clock minus the server's,
+ * and a device a minute behind would otherwise show a confident 0.0s that never moves. No
+ * number beats a wrong one.
+ */
 export function elapsedMs(timing: StageTiming | undefined, now: number): number | undefined {
   if (!timing) return undefined;
-  return (timing.leftAt ?? now) - timing.enteredAt;
+
+  const elapsed = (timing.leftAt ?? now) - timing.enteredAt;
+  return elapsed < 0 ? undefined : elapsed;
 }
 
 function close(

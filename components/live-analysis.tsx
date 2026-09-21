@@ -41,7 +41,7 @@ export function LiveAnalysis({ intakeId }: { intakeId: string }) {
         </Block>
       </div>
 
-      {/* T5.6: when the stream will not stay up, polling still gets the result on screen. */}
+      {/* When the stream will not stay up, polling still gets the result on screen. */}
       <AutoRefresh enabled={health === 'degraded'} />
     </>
   );

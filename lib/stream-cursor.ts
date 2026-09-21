@@ -2,14 +2,24 @@ import { db } from './db';
 import { resumePoint } from './stream';
 
 /**
- * Where a new /api/stream connection starts reading; a reconnect resumes where it got to.
+ * Where a new connection to /api/stream should start reading.
  *
- * A detail page replays from the last QUEUED so an earlier run's FAILED cannot settle the
- * stepper; a list page starts at the tip, since the server just rendered current state.
+ * A reconnect's Last-Event-ID wins outright; otherwise `sinceSeq` says where the page was
+ * rendered, so events landing between render and connect are not missed.
+ *
+ * A detail page with no cursor replays from the last QUEUED, since the stepper's timings come
+ * from the event log and an earlier run's FAILED would settle it on a retried-away result.
+ * With nothing to go on, start at the tip.
  */
-export async function resolveCursor(request: Request, intakeId?: string): Promise<number> {
+export async function resolveCursor(
+  request: Request,
+  { intakeId, sinceSeq }: { intakeId?: string; sinceSeq?: string | null } = {},
+): Promise<number> {
   const resumeFrom = resumePoint(request.headers.get('Last-Event-ID'));
   if (resumeFrom !== undefined) return resumeFrom;
+
+  const rendered = resumePoint(sinceSeq ?? null);
+  if (rendered !== undefined) return rendered;
 
   if (intakeId) {
     const run = await db.event.findFirst({

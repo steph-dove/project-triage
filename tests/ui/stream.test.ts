@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { encodeFrame, parseFrame, resumePoint, type StreamEvent } from '../../lib/stream';
+import {
+  encodeFrame,
+  parseFrame,
+  projectPayload,
+  resumePoint,
+  type StreamEvent,
+} from '../../lib/stream';
 
 const event: StreamEvent = {
   seq: 42,
@@ -70,5 +76,36 @@ describe('resumePoint', () => {
     expect(resumePoint('-1')).toBeUndefined();
     expect(resumePoint('1.5')).toBeUndefined();
     expect(resumePoint('99999999999999999999')).toBeUndefined();
+  });
+});
+
+describe('projectPayload', () => {
+  it('keeps the streamed summary, which is the whole point of a partial', () => {
+    expect(projectPayload('PARTIAL', { summary: 'half a sentence' })).toEqual({
+      summary: 'half a sentence',
+    });
+  });
+
+  it('does not put the raw provider error in front of every list viewer', () => {
+    // OpenAI's own 401 text quotes the partially masked key back at you, and the unfiltered
+    // stream carries every intake in the system.
+    expect(
+      projectPayload('CALLING_MODEL', { provider: 'openai', model: 'gpt-4o-mini' }),
+    ).toBeNull();
+    expect(projectPayload('CLAIMED', { workerId: 'box-4821-a9f', attempt: 2 })).toBeNull();
+  });
+
+  it('keeps the error on the events whose banner shows it', () => {
+    expect(projectPayload('FAILED', { error: 'invalid API credentials', workerId: 'box-1' })).toEqual(
+      { error: 'invalid API credentials' },
+    );
+    expect(projectPayload('RETRY_SCHEDULED', { error: 'OpenAI returned 503.' })).toEqual({
+      error: 'OpenAI returned 503.',
+    });
+  });
+
+  it('has nothing to say about an event with no payload', () => {
+    expect(projectPayload('QUEUED', null)).toBeNull();
+    expect(projectPayload('PARTIAL', {})).toBeNull();
   });
 });

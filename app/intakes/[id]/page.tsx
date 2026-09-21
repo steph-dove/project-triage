@@ -82,6 +82,11 @@ function TriageAnalysis({ intake }: { intake: SerializedIntake }) {
     return <LiveAnalysis intakeId={id} />;
   }
 
+  // Retrying does not clear the previous result, so a retry that fails hard leaves one here.
+  // It is still the best analysis this intake has, and burying it under a banner saying nothing
+  // was generated would be both a worse page and a false one.
+  const retained = enrichment.state === 'FAILED' && enrichment.summary !== null;
+
   return (
     <>
       <div className="flex items-start justify-between gap-4">
@@ -93,13 +98,13 @@ function TriageAnalysis({ intake }: { intake: SerializedIntake }) {
 
       <div className="mt-5 space-y-5">
         {enrichment.state === 'FAILED' && (
-          <FailureBanner intakeId={id} enrichment={enrichment} />
+          <FailureBanner intakeId={id} enrichment={enrichment} retained={retained} />
         )}
-        {enrichment.state === 'READY' && (
+        {enrichment.state === 'READY' && enrichment.source === 'FALLBACK' && (
+          <FallbackBanner intakeId={id} enrichment={enrichment} />
+        )}
+        {(enrichment.state === 'READY' || retained) && (
           <>
-            {enrichment.source === 'FALLBACK' && (
-              <FallbackBanner intakeId={id} enrichment={enrichment} />
-            )}
             <Block label="Summary">
               <p className="leading-relaxed">{enrichment.summary}</p>
             </Block>
@@ -182,14 +187,24 @@ function FallbackBanner({ intakeId, enrichment }: { intakeId: string; enrichment
   );
 }
 
-function FailureBanner({ intakeId, enrichment }: { intakeId: string; enrichment: Enrichment }) {
+function FailureBanner({
+  intakeId,
+  enrichment,
+  retained,
+}: {
+  intakeId: string;
+  enrichment: Enrichment;
+  retained: boolean;
+}) {
   return (
     <div role="alert" className="rounded-md bg-clay px-4 py-3 text-clay-ink">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="font-semibold">Analysis failed</p>
           <p className="mt-1 text-sm">
-            The intake is saved and safe. Nothing was generated for it yet.
+            {retained
+              ? 'What is below is the result from before the retry.'
+              : 'The intake is saved and safe. Nothing was generated for it yet.'}
             {enrichment.attempts > 0 && ` Tried ${attemptCount(enrichment.attempts)}.`}
           </p>
         </div>
