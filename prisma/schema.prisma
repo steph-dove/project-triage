@@ -58,6 +58,8 @@ model Enrichment {
 
   @@index([state, nextAttemptAt])
   @@index([state, leaseExpiresAt])
+  // The dashboard's latency sample: newest finished results first.
+  @@index([state, source, updatedAt])
 }
 
 // Rows rather than a JSON blob so the dashboard can groupBy.
@@ -83,4 +85,17 @@ model Event {
 
   @@index([intakeId, seq])
   @@index([seq])
+  // The dashboard's retry count. PARTIAL makes this the fastest-growing table, so no scans.
+  @@index([type, createdAt])
+}
+
+// Presence, not coordination: nothing reads this to decide who runs a job. Job locks alone
+// cannot show an idle worker, and the dashboard counts those too.
+model Worker {
+  id          String   @id
+  concurrency Int
+  startedAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }

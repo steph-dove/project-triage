@@ -11,6 +11,8 @@ export class Worker {
   private running = false;
   private pollTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
+  // Awaited before retiring, or an upsert still in flight would put the row straight back.
+  private presence: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly db: PrismaClient,
@@ -28,6 +30,7 @@ export class Worker {
     );
 
     this.heartbeatTimer = setInterval(() => void this.beat(), this.config.heartbeatMs);
+    this.announce();
     void this.tick();
   }
 
@@ -53,6 +56,11 @@ export class Worker {
         console.error(`[worker] could not release ${job.enrichmentId} on shutdown`, err);
       });
     }
+
+    await this.presence;
+    await this.store.retire().catch((err) => {
+      console.error('[worker] could not retire, the dashboard will count it until it expires', err);
+    });
 
     if (drained === 'timeout') console.warn('[worker] drain timed out, released the stragglers');
     console.log(`[worker ${this.config.workerId}] stopped`);
@@ -91,7 +99,16 @@ export class Worker {
     if (this.running) this.pollTimer = setTimeout(() => void this.tick(), this.config.pollMs);
   }
 
+  private announce() {
+    if (!this.running) return;
+    this.presence = this.store.announce(this.config.concurrency).catch((err) => {
+      console.error('[worker] could not record presence', err);
+    });
+  }
+
   private async beat() {
+    this.announce();
+
     for (const { job, controller } of this.inFlight.values()) {
       try {
         const held = await this.store.heartbeat(job.enrichmentId, job.lockToken);

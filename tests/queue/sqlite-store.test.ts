@@ -29,6 +29,7 @@ async function seedIntake(overrides: { nextAttemptAt?: Date } = {}) {
 
 beforeEach(async () => {
   await db.intake.deleteMany();
+  await db.worker.deleteMany();
 });
 
 afterAll(async () => {
@@ -219,5 +220,39 @@ describe('release', () => {
     expect(row.state).toBe('PENDING');
     expect(row.attempts).toBe(0);
     expect(row.nextAttemptAt.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+});
+
+describe('presence', () => {
+  it('renews one row per worker rather than adding another', async () => {
+    const store = new SqliteJobStore(db, 'worker-a', 60_000);
+
+    await store.announce(4);
+    const first = await db.worker.findUniqueOrThrow({ where: { id: 'worker-a' } });
+    await new Promise((r) => setTimeout(r, 5));
+    await store.announce(4);
+    const renewed = await db.worker.findUniqueOrThrow({ where: { id: 'worker-a' } });
+
+    expect(await db.worker.count()).toBe(1);
+    expect(renewed.expiresAt.getTime()).toBeGreaterThan(first.expiresAt.getTime());
+  });
+
+  it('clears out a worker that crashed without retiring', async () => {
+    await new SqliteJobStore(db, 'worker-dead', -1_000).announce(4);
+    await new SqliteJobStore(db, 'worker-live', 60_000).announce(2);
+
+    const ids = (await db.worker.findMany({ select: { id: true } })).map((w) => w.id);
+    expect(ids).toEqual(['worker-live']);
+  });
+
+  it('removes only its own row on retire', async () => {
+    const a = new SqliteJobStore(db, 'worker-a', 60_000);
+    await a.announce(4);
+    await new SqliteJobStore(db, 'worker-b', 60_000).announce(4);
+
+    await a.retire();
+
+    const ids = (await db.worker.findMany({ select: { id: true } })).map((w) => w.id);
+    expect(ids).toEqual(['worker-b']);
   });
 });

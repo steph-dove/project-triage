@@ -44,6 +44,8 @@ class FakeStore implements JobStore {
   readonly released: string[] = [];
   readonly failures: FailureOutcome[] = [];
   readonly completed: string[] = [];
+  readonly announced: number[] = [];
+  retired = false;
   heartbeatHeld = true;
 
   constructor(private readonly pending: ClaimedJob[] = []) {}
@@ -69,6 +71,12 @@ class FakeStore implements JobStore {
   }
   async reap() {
     return 0;
+  }
+  async announce(concurrency: number) {
+    this.announced.push(concurrency);
+  }
+  async retire() {
+    this.retired = true;
   }
   subscribe(): Subscription {
     return { stop: () => {} };
@@ -111,6 +119,48 @@ describe('shutdown', () => {
 
     expect(store.failures).toHaveLength(0);
     expect(store.released).toContain('e1');
+  });
+});
+
+describe('presence', () => {
+  it('announces on start, renews on the heartbeat, and retires on stop', async () => {
+    const store = new FakeStore();
+    const worker = start(store, blockUntilAborted);
+
+    await waitFor(() => store.announced.length >= 2);
+    expect(store.announced.every((c) => c === 2)).toBe(true);
+
+    await worker.stop();
+    expect(store.retired).toBe(true);
+  });
+
+  it('does not let a slow announce land after it has retired', async () => {
+    const store = new FakeStore();
+    const writes: string[] = [];
+    store.announce = async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      writes.push('announce');
+    };
+    store.retire = async () => {
+      writes.push('retire');
+    };
+
+    const worker = start(store, blockUntilAborted, { WORKER_HEARTBEAT_MS: '500' });
+    await worker.stop();
+    // Long enough for an announce that was not waited for to land after the retire.
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(writes).toEqual(['announce', 'retire']);
+  });
+
+  it('keeps working when presence cannot be written', async () => {
+    const store = new FakeStore([job()]);
+    store.announce = async () => {
+      throw new Error('database is locked');
+    };
+    start(store, async () => ({ summary: 's', tags: [], risks: [], source: 'LLM' }));
+
+    await waitFor(() => store.completed.length > 0);
   });
 });
 
