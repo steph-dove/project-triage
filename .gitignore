@@ -14,10 +14,10 @@ plan.md
 /out/
 /build
 next-env.d.ts
+*.tsbuildinfo
 
 # bundled worker (npm run build:worker)
 /dist
-*.tsbuildinfo
 
 # testing
 /coverage

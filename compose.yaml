@@ -1,13 +1,9 @@
-# docker compose up                     web on :3000, two workers
+# docker compose up                     web on :3000 (PORT=3100 to publish elsewhere), two workers
 # docker compose up --scale worker=3    or set WORKER_REPLICAS
 # docker compose run --rm migrate npx prisma db seed    load the sample intakes
 #
-# A new migration needs the app stopped first (docker compose down, then up): Prisma cannot
-# migrate a SQLite file that web and the workers have open.
-#
-# Values come from .env when it exists. Without one, the worker runs on the mock AI provider,
-# so a clean clone starts with no API key. Set AI_PROVIDER=openai and OPENAI_API_KEY for the
-# real model.
+# A new migration needs `docker compose down` first: Prisma can't migrate a SQLite file that's open.
+# Without a .env the worker uses the mock AI provider; set AI_PROVIDER=openai and OPENAI_API_KEY for the real one.
 
 x-app: &app
   build:
@@ -21,7 +17,6 @@ x-app: &app
       condition: service_completed_successfully
 
 x-database: &database
-  # The ./data bind mount holds dev.db and its WAL sidecars; every service opens the same file.
   DATABASE_URL: file:/app/data/dev.db
 
 services:
@@ -42,6 +37,8 @@ services:
       - "${PORT:-3000}:3000"
     environment:
       <<: *database
+    # Open SSE streams never finish, and web holds no leases, so don't wait long for them.
+    stop_grace_period: 3s
     restart: unless-stopped
 
   worker:
@@ -54,7 +51,7 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
       FORCE_AI_FAILURE: ${FORCE_AI_FAILURE:-}
-      # The config schema rejects an empty string, so each default here mirrors the code's.
+      # Defaults mirror the code's, because its config schema rejects an empty string.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_POLL_MS: ${WORKER_POLL_MS:-500}
       WORKER_LEASE_MS: ${WORKER_LEASE_MS:-60000}
@@ -63,6 +60,6 @@ services:
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
-    # Longer than WORKER_DRAIN_MS, so SIGTERM gets to hand leases back before SIGKILL.
+    # Keep above WORKER_DRAIN_MS, or SIGKILL lands before leases are handed back.
     stop_grace_period: 20s
     restart: unless-stopped
