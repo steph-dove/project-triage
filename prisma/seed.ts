@@ -2,9 +2,7 @@ import { PrismaClient } from '@prisma/client';
 
 const db = new PrismaClient();
 
-// Fourteen rows: enough that pagination is visible on page one and the dashboard has shape.
-// Industry, budget and status are deliberately uneven so filters and counts return something
-// other than a flat distribution.
+// Uneven on purpose so pagination, filters and dashboard counts have something to show.
 const intakes = [
   {
     title: 'Customer churn prediction model',
@@ -152,16 +150,14 @@ const summarise = (intake: (typeof intakes)[number]) =>
   `${intake.industry} client seeking ${intake.title.toLowerCase()}. Stated budget ${intake.budgetRange} over ${intake.timeline}. Scope is described in enough detail to estimate, though discovery would confirm data availability.`;
 
 async function main() {
-  // Idempotent: re-seeding wipes first, so `npm run db:seed` twice does not double the rows.
-  // Cascades clear Enrichment, Tag and Event.
+  // Wipe first so re-seeding does not double the rows; cascades clear the rest.
   await db.intake.deleteMany();
 
   const now = Date.now();
 
   for (const [i, intake] of intakes.entries()) {
     const { tags, ...fields } = intake;
-    // Spread creation times so the list view's relative timestamps and createdAt ordering
-    // look like real traffic rather than fourteen rows from the same second.
+    // Spread over time so relative timestamps are not all "14 rows, same second".
     const createdAt = new Date(now - (intakes.length - i) * 7_200_000);
 
     await db.intake.create({
