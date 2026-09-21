@@ -28,11 +28,19 @@ export function TagChip({ label }: { label: string }) {
   );
 }
 
-export function AnalysingPill() {
+// A claimed job is being worked on and its lease catches a stall; an unclaimed one only waits,
+// indefinitely if no worker is running, so calling both "Analysing" would be misleading.
+export function PendingPill({ state }: { state: 'PENDING' | 'PROCESSING' }) {
+  const queued = state === 'PENDING';
+
   return (
-    <span className="inline-flex items-center gap-1.5 rounded bg-clay px-2 py-1 font-mono text-xs font-semibold tracking-wide text-rust uppercase">
-      <span className="size-1.5 rounded-full bg-rust" />
-      Analysing
+    <span
+      className={`inline-flex items-center gap-1.5 rounded px-2 py-1 font-mono text-xs font-semibold tracking-wide uppercase ${
+        queued ? 'bg-stone text-stone-ink' : 'bg-clay text-rust'
+      }`}
+    >
+      <span className={`size-1.5 rounded-full ${queued ? 'bg-faint' : 'bg-rust'}`} />
+      {queued ? 'Queued' : 'Analysing'}
     </span>
   );
 }

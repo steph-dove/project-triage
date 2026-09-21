@@ -1,7 +1,8 @@
 import { notFound } from 'next/navigation';
-import { AnalysingPill, Skeleton, TagChip } from '@/components/badges';
+import { AutoRefresh } from '@/components/auto-refresh';
+import { PendingPill, Skeleton, TagChip } from '@/components/badges';
 import { BackToIntakes } from '@/components/back-link';
-import { getIntake, type SerializedIntake } from '@/lib/intakes';
+import { getIntake, isAnalysing, type SerializedIntake } from '@/lib/intakes';
 import { relativeTime } from '@/lib/time';
 import { StatusButtons } from './status-buttons';
 
@@ -20,6 +21,7 @@ export default async function IntakeDetailPage({
 
   return (
     <div className="space-y-6">
+      <AutoRefresh enabled={isAnalysing(intake.enrichment)} />
       <BackToIntakes />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -73,7 +75,11 @@ function TriageAnalysis({ enrichment, tags }: { enrichment: Enrichment | null; t
     );
   }
 
-  const analysing = enrichment.state === 'PENDING' || enrichment.state === 'PROCESSING';
+  // Narrowed rather than tested, so PendingPill gets the state without a cast.
+  const pending =
+    enrichment.state === 'PENDING' || enrichment.state === 'PROCESSING'
+      ? enrichment.state
+      : undefined;
 
   return (
     <>
@@ -81,11 +87,11 @@ function TriageAnalysis({ enrichment, tags }: { enrichment: Enrichment | null; t
         <h2 className="font-mono text-xs tracking-widest text-faint uppercase">
           Triage analysis
         </h2>
-        {analysing ? <AnalysingPill /> : <StateBadge state={enrichment.state} />}
+        {pending ? <PendingPill state={pending} /> : <StateBadge state={enrichment.state} />}
       </div>
 
       <div className="mt-5 space-y-5">
-        {analysing && <AnalysingBody />}
+        {pending && <AnalysingBody />}
         {enrichment.state === 'FAILED' && <FailureBanner enrichment={enrichment} />}
         {enrichment.state === 'READY' && (
           <>
@@ -107,7 +113,7 @@ function TriageAnalysis({ enrichment, tags }: { enrichment: Enrichment | null; t
         )}
       </div>
 
-      {!analysing && <Instrumentation enrichment={enrichment} />}
+      {!pending && <Instrumentation enrichment={enrichment} />}
     </>
   );
 }

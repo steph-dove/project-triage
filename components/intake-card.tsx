@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { SerializedIntake } from '@/lib/intakes';
 import { relativeTime } from '@/lib/time';
-import { AnalysingPill, BasicAnalysisChip, Skeleton, StatusBadge, TagChip } from './badges';
+import { BasicAnalysisChip, PendingPill, Skeleton, StatusBadge, TagChip } from './badges';
 
 export function IntakeCard({ intake }: { intake: SerializedIntake }) {
   return (
@@ -40,7 +40,7 @@ function AnalysisSummary({ intake }: { intake: SerializedIntake }) {
   if (enrichment.state === 'PENDING' || enrichment.state === 'PROCESSING') {
     return (
       <>
-        <AnalysingPill />
+        <PendingPill state={enrichment.state} />
         <Skeleton className="h-6 w-24" />
         <Skeleton className="h-6 w-16" />
       </>

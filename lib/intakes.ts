@@ -74,6 +74,9 @@ export async function listIntakes({ page, pageSize, status }: ListIntakesQuery) 
   };
 }
 
+export const isAnalysing = (enrichment: SerializedIntake['enrichment']) =>
+  enrichment?.state === 'PENDING' || enrichment?.state === 'PROCESSING';
+
 export async function getIntake(id: string): Promise<SerializedIntake | null> {
   const intake = await db.intake.findUnique({ where: { id }, select: intakeSelect });
   return intake ? serializeIntake(intake) : null;
