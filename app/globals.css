@@ -1,26 +1,63 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Warm paper and near-black ink, taken from the wireframes. The app is light only: every
+   screen was designed against the paper background and a dark theme would need its own pass. */
+@theme {
+  --color-paper: #f2f0eb;
+  --color-card: #ffffff;
+  --color-line: #e6e2d9;
+  --color-ink: #1a1815;
+  --color-muted: #6f6a60;
+  --color-faint: #9a958a;
+
+  /* Analysing, and anything else mid-flight. */
+  --color-rust: #b4532a;
+
+  --color-sage: #dde8dd;
+  --color-sage-ink: #3d5c41;
+  --color-moss: #cadcc9;
+  --color-moss-ink: #2c4830;
+  --color-amber: #f7efd9;
+  --color-amber-ink: #7d6320;
+  --color-clay: #f8e9e5;
+  --color-clay-ink: #a33b28;
+  --color-stone: #ebe8e1;
+  --color-stone-ink: #4a463f;
 }
 
+/* Inline, unlike the colours above: next/font sets these on the body class, so a theme
+   variable declared on :root would reference something that is not there yet. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-serif: var(--font-source-serif);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+/* Tailwind's default ring is blue, which is the one colour the palette does not have. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-rust);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes pulse-soft {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
