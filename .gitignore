@@ -38,3 +38,6 @@ yarn-error.log*
 .pnpm-debug.log*
 .vercel
 !/data/.gitkeep
+
+# PR description written by the klaussy pr skill
+pr-description.md
