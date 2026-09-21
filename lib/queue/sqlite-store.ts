@@ -1,0 +1,260 @@
+import { randomUUID } from 'node:crypto';
+import type { PrismaClient } from '@prisma/client';
+import { emit } from '../events';
+import type {
+  ClaimedJob,
+  EnrichmentResult,
+  FailureOutcome,
+  JobStore,
+  QueueEvent,
+  SubscribeHandlers,
+  Subscription,
+} from './types';
+
+class StaleLockError extends Error {}
+
+const TAIL_INTERVAL_MS = 250;
+const MAX_TAIL_BACKOFF = 5;
+
+const releasedLock = {
+  lockedBy: null,
+  lockToken: null,
+  leaseExpiresAt: null,
+} as const;
+
+export class SqliteJobStore implements JobStore {
+  constructor(
+    private readonly db: PrismaClient,
+    private readonly workerId: string,
+    private readonly leaseMs: number,
+  ) {}
+
+  async claim(limit: number): Promise<ClaimedJob[]> {
+    if (limit <= 0) return [];
+
+    const candidates = await this.db.enrichment.findMany({
+      where: { state: 'PENDING', nextAttemptAt: { lte: new Date() } },
+      orderBy: { nextAttemptAt: 'asc' },
+      // Over-fetch: some of these will be taken by another replica before we get to them.
+      take: limit * 3,
+      select: { id: true },
+    });
+
+    const claimed: ClaimedJob[] = [];
+
+    for (const candidate of candidates) {
+      if (claimed.length >= limit) break;
+
+      const lockToken = randomUUID();
+      // Compare-and-swap: two workers racing the same row cannot both get count 1.
+      const result = await this.db.enrichment.updateMany({
+        where: { id: candidate.id, state: 'PENDING' },
+        data: {
+          state: 'PROCESSING',
+          lockedBy: this.workerId,
+          lockToken,
+          leaseExpiresAt: new Date(Date.now() + this.leaseMs),
+          attempts: { increment: 1 },
+        },
+      });
+      if (result.count === 0) continue;
+
+      const row = await this.db.enrichment.findUniqueOrThrow({
+        where: { id: candidate.id },
+        select: {
+          id: true,
+          intakeId: true,
+          attempts: true,
+          intake: {
+            select: {
+              title: true,
+              description: true,
+              budgetRange: true,
+              timeline: true,
+              industry: true,
+            },
+          },
+        },
+      });
+
+      claimed.push({
+        enrichmentId: row.id,
+        intakeId: row.intakeId,
+        attempts: row.attempts,
+        lockToken,
+        intake: row.intake,
+      });
+    }
+
+    return claimed;
+  }
+
+  async heartbeat(enrichmentId: string, lockToken: string): Promise<boolean> {
+    const result = await this.db.enrichment.updateMany({
+      where: { id: enrichmentId, lockToken, state: 'PROCESSING' },
+      data: { leaseExpiresAt: new Date(Date.now() + this.leaseMs) },
+    });
+    return result.count === 1;
+  }
+
+  async complete(
+    enrichmentId: string,
+    lockToken: string,
+    result: EnrichmentResult,
+  ): Promise<boolean> {
+    return this.fenced(enrichmentId, lockToken, async (tx, intakeId) => {
+      await tx.enrichment.updateMany({
+        where: { id: enrichmentId, lockToken },
+        data: {
+          state: 'READY',
+          summary: result.summary,
+          risks: JSON.stringify(result.risks),
+          source: result.source,
+          model: result.model ?? null,
+          promptVersion: result.promptVersion ?? null,
+          rawResponse: result.rawResponse ?? null,
+          latencyMs: result.latencyMs ?? null,
+          tokensIn: result.tokensIn ?? null,
+          tokensOut: result.tokensOut ?? null,
+          error: null,
+          ...releasedLock,
+        },
+      });
+
+      // Replaced, not merged, so a retry does not leave tags from the attempt before it.
+      await tx.tag.deleteMany({ where: { intakeId } });
+      if (result.tags.length > 0) {
+        await tx.tag.createMany({
+          data: result.tags.map((label) => ({ intakeId, label })),
+        });
+      }
+
+      await emit(tx, intakeId, result.source === 'FALLBACK' ? 'FALLBACK' : 'READY', {
+        source: result.source,
+      });
+    });
+  }
+
+  async fail(
+    enrichmentId: string,
+    lockToken: string,
+    outcome: FailureOutcome,
+  ): Promise<boolean> {
+    return this.fenced(enrichmentId, lockToken, async (tx, intakeId) => {
+      const retrying = outcome.retryAt !== undefined;
+
+      await tx.enrichment.updateMany({
+        where: { id: enrichmentId, lockToken },
+        data: {
+          state: retrying ? 'PENDING' : 'FAILED',
+          error: outcome.error,
+          // Backoff lives in the database, so it survives a restart.
+          ...(outcome.retryAt ? { nextAttemptAt: outcome.retryAt } : {}),
+          ...releasedLock,
+        },
+      });
+
+      await emit(
+        tx,
+        intakeId,
+        retrying ? 'RETRY_SCHEDULED' : 'FAILED',
+        retrying ? { error: outcome.error, retryAt: outcome.retryAt } : { error: outcome.error },
+      );
+    });
+  }
+
+  // claim() counts the attempt up front, so the hand-back gives it back: otherwise rolling
+  // restarts alone would exhaust maxAttempts on a job that never ran.
+  async release(enrichmentId: string, lockToken: string): Promise<boolean> {
+    const result = await this.db.enrichment.updateMany({
+      where: { id: enrichmentId, lockToken },
+      data: {
+        state: 'PENDING',
+        nextAttemptAt: new Date(),
+        attempts: { decrement: 1 },
+        ...releasedLock,
+      },
+    });
+    return result.count === 1;
+  }
+
+  // No coordinator: a dead worker stops extending its lease, whoever notices first resets it.
+  async reap(): Promise<number> {
+    const result = await this.db.enrichment.updateMany({
+      where: { state: 'PROCESSING', leaseExpiresAt: { lt: new Date() } },
+      data: { state: 'PENDING', nextAttemptAt: new Date(), ...releasedLock },
+    });
+    return result.count;
+  }
+
+  // The Postgres adapter swaps LISTEN/NOTIFY in behind this same signature.
+  subscribe(sinceSeq: number, { onEvent, onError }: SubscribeHandlers): Subscription {
+    let cursor = sinceSeq;
+    let stopped = false;
+    let consecutiveFailures = 0;
+    let timer: NodeJS.Timeout | undefined;
+
+    const tick = async () => {
+      if (stopped) return;
+
+      try {
+        const rows = await this.db.event.findMany({
+          where: { seq: { gt: cursor } },
+          orderBy: { seq: 'asc' },
+          take: 200,
+        });
+        consecutiveFailures = 0;
+
+        for (const row of rows) {
+          if (stopped) return;
+          cursor = row.seq;
+          onEvent(row as QueueEvent);
+        }
+      } catch (err) {
+        consecutiveFailures += 1;
+        console.error(`[queue] event tail failed ${consecutiveFailures}x`, err);
+        onError?.(err, consecutiveFailures);
+      }
+
+      if (!stopped) {
+        const delay = TAIL_INTERVAL_MS * 2 ** Math.min(consecutiveFailures, MAX_TAIL_BACKOFF);
+        timer = setTimeout(tick, delay);
+      }
+    };
+
+    void tick();
+
+    return {
+      stop: () => {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+      },
+    };
+  }
+
+  // Token checked inside the transaction, so a reaped worker's late write rolls back whole.
+  private async fenced(
+    enrichmentId: string,
+    lockToken: string,
+    work: (
+      tx: Parameters<Parameters<PrismaClient['$transaction']>[0]>[0],
+      intakeId: string,
+    ) => Promise<void>,
+  ): Promise<boolean> {
+    try {
+      await this.db.$transaction(async (tx) => {
+        const row = await tx.enrichment.findFirst({
+          where: { id: enrichmentId, lockToken },
+          select: { intakeId: true },
+        });
+        if (!row) throw new StaleLockError();
+
+        await work(tx, row.intakeId);
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof StaleLockError) return false;
+      throw err;
+    }
+  }
+}

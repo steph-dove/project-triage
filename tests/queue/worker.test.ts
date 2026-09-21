@@ -1,0 +1,187 @@
+import type { PrismaClient } from '@prisma/client';
+import { afterEach, describe, expect, it } from 'vitest';
+import { loadWorkerConfig } from '../../lib/queue/config';
+import { Worker } from '../../lib/queue/worker';
+import {
+  RetriableError,
+  type ClaimedJob,
+  type FailureOutcome,
+  type JobStore,
+  type Processor,
+  type Subscription,
+} from '../../lib/queue/types';
+
+const db = { event: { create: async () => ({}) } } as unknown as PrismaClient;
+
+const config = (overrides: Record<string, string> = {}) =>
+  loadWorkerConfig({
+    WORKER_CONCURRENCY: '2',
+    WORKER_POLL_MS: '10',
+    WORKER_LEASE_MS: '1000',
+    WORKER_HEARTBEAT_MS: '10',
+    WORKER_MAX_ATTEMPTS: '3',
+    WORKER_DRAIN_MS: '100',
+    ...overrides,
+  });
+
+const job = (overrides: Partial<ClaimedJob> = {}): ClaimedJob => ({
+  enrichmentId: 'e1',
+  intakeId: 'i1',
+  attempts: 1,
+  lockToken: 't1',
+  intake: {
+    title: 'Test intake',
+    description: 'A description long enough to be realistic.',
+    budgetRange: '$50k-100k',
+    timeline: '6 weeks',
+    industry: 'Logistics',
+  },
+  ...overrides,
+});
+
+class FakeStore implements JobStore {
+  readonly claims: number[] = [];
+  readonly released: string[] = [];
+  readonly failures: FailureOutcome[] = [];
+  readonly completed: string[] = [];
+  heartbeatHeld = true;
+
+  constructor(private readonly pending: ClaimedJob[] = []) {}
+
+  async claim(limit: number) {
+    this.claims.push(limit);
+    return this.pending.splice(0, limit);
+  }
+  async heartbeat() {
+    return this.heartbeatHeld;
+  }
+  async complete(enrichmentId: string) {
+    this.completed.push(enrichmentId);
+    return true;
+  }
+  async fail(_enrichmentId: string, _lockToken: string, outcome: FailureOutcome) {
+    this.failures.push(outcome);
+    return true;
+  }
+  async release(enrichmentId: string) {
+    this.released.push(enrichmentId);
+    return true;
+  }
+  async reap() {
+    return 0;
+  }
+  subscribe(): Subscription {
+    return { stop: () => {} };
+  }
+}
+
+const blockUntilAborted: Processor = (_job, ctx) =>
+  new Promise((_resolve, reject) => {
+    ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  });
+
+const waitFor = async (predicate: () => boolean, timeout = 2_000) => {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for the worker');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
+let running: Worker | undefined;
+
+const start = (store: FakeStore, processor: Processor, overrides?: Record<string, string>) => {
+  running = new Worker(db, config(overrides), processor, store);
+  running.start();
+  return running;
+};
+
+afterEach(async () => {
+  await running?.stop();
+  running = undefined;
+});
+
+describe('shutdown', () => {
+  it('hands an in-flight job back instead of failing it', async () => {
+    const store = new FakeStore([job()]);
+    const worker = start(store, blockUntilAborted);
+
+    await waitFor(() => store.claims.length > 0);
+    await worker.stop();
+
+    expect(store.failures).toHaveLength(0);
+    expect(store.released).toContain('e1');
+  });
+});
+
+describe('heartbeat', () => {
+  it('aborts a job whose lease it no longer holds', async () => {
+    const store = new FakeStore([job()]);
+    store.heartbeatHeld = false;
+
+    let aborted = false;
+    const processor: Processor = (_job, ctx) =>
+      new Promise((_resolve, reject) => {
+        ctx.signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+            reject(new Error('aborted'));
+          },
+          { once: true },
+        );
+      });
+
+    start(store, processor);
+
+    await waitFor(() => aborted);
+  });
+});
+
+describe('failures', () => {
+  it('schedules a retry for a RetriableError', async () => {
+    const store = new FakeStore([job()]);
+    start(store, async () => {
+      throw new RetriableError('upstream is down');
+    });
+
+    await waitFor(() => store.failures.length > 0);
+
+    expect(store.failures[0].error).toBe('upstream is down');
+    expect(store.failures[0].retryAt).toBeInstanceOf(Date);
+  });
+
+  it('gives up on anything else', async () => {
+    const store = new FakeStore([job()]);
+    start(store, async () => {
+      throw new Error('the model returned nonsense');
+    });
+
+    await waitFor(() => store.failures.length > 0);
+
+    expect(store.failures[0].retryAt).toBeUndefined();
+  });
+
+  it('stops retrying once the attempts are spent', async () => {
+    const store = new FakeStore([job({ attempts: 3 })]);
+    start(store, async () => {
+      throw new RetriableError('upstream is still down');
+    });
+
+    await waitFor(() => store.failures.length > 0);
+
+    expect(store.failures[0].retryAt).toBeUndefined();
+  });
+});
+
+describe('capacity', () => {
+  it('never asks for more jobs than it has room for', async () => {
+    const store = new FakeStore([job()]);
+    start(store, blockUntilAborted);
+
+    await waitFor(() => store.claims.length >= 2);
+
+    expect(store.claims[0]).toBe(2);
+    expect(store.claims[1]).toBe(1);
+  });
+});
