@@ -9,14 +9,21 @@ export async function register() {
   if (process.env.WORKER_IN_PROCESS !== 'true') return;
   if (globalForWorker.triageWorker) return;
 
-  const [{ db }, { loadWorkerConfig }, { stubProcessor }, { Worker }] = await Promise.all([
-    import('./lib/db'),
-    import('./lib/queue/config'),
-    import('./lib/queue/processors/stub'),
-    import('./lib/queue/worker'),
-  ]);
+  const [{ db }, { loadAiConfig }, { loadWorkerConfig }, { createEnrichmentProcessor }, { Worker }] =
+    await Promise.all([
+      import('./lib/db'),
+      import('./lib/ai/config'),
+      import('./lib/queue/config'),
+      import('./lib/queue/processors/enrich'),
+      import('./lib/queue/worker'),
+    ]);
 
-  const worker = new Worker(db, loadWorkerConfig(), stubProcessor);
+  const config = loadWorkerConfig();
+  const worker = new Worker(
+    db,
+    config,
+    createEnrichmentProcessor(loadAiConfig(), config.maxAttempts),
+  );
   globalForWorker.triageWorker = worker;
   worker.start();
 

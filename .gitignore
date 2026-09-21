@@ -41,3 +41,6 @@ yarn-error.log*
 
 # PR description written by the klaussy pr skill
 pr-description.md
+
+# Cached model responses, so a re-run does not cost another call
+data/ai-cache/
