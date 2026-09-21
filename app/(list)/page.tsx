@@ -11,6 +11,8 @@ import { STATUS_LABELS } from '@/lib/status';
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
+// No loading.tsx or Suspense here: in production builds they made the router drop navigations
+// that only change the query string, and the event stream's refreshes, leaving cards on Queued.
 export default async function IntakeListPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
   const query = ListIntakesQuerySchema.parse({ page: params.page, status: params.status });
