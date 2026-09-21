@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { networkMessage, REQUEST_TIMEOUT_MS } from '@/lib/network';
 import { CreateIntakeSchema, type CreateIntakeInput } from '@/lib/schemas';
 
 type Field = keyof CreateIntakeInput;
@@ -46,20 +47,23 @@ export function CreateIntakeForm() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed.data),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const body = await response.json().catch(() => null);
 
       if (!response.ok) {
         if (body?.fieldErrors) setErrors(firstMessages(body.fieldErrors));
         setSubmitError(body?.error ?? `The server rejected the intake (${response.status}).`);
+        setSubmitting(false);
         return;
       }
 
+      // Left disabled because the form stays mounted until the detail page loads, and a second
+      // click would post twice: POST /api/intakes has no idempotency key.
       router.push(`/intakes/${body.id}`);
     } catch (err) {
       console.error('[create] could not submit the intake', err);
-      setSubmitError('Could not reach the server. Check your connection and try again.');
-    } finally {
+      setSubmitError(networkMessage(err));
       setSubmitting(false);
     }
   };

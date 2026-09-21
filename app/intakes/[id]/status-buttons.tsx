@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { TRIAGE_STATUSES, type TriageStatus } from '@/lib/schemas';
+import { networkMessage, REQUEST_TIMEOUT_MS } from '@/lib/network';
 
 // The buttons read as actions, not as labels: "Accept", not "Accepted".
 const ACTION_LABELS: Record<TriageStatus, string> = {
@@ -30,6 +31,7 @@ export function StatusButtons({ id, status }: { id: string; status: TriageStatus
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: next }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -41,7 +43,7 @@ export function StatusButtons({ id, status }: { id: string; status: TriageStatus
       startTransition(() => router.refresh());
     } catch (err) {
       console.error(`[detail] could not set ${id} to ${next}`, err);
-      setError('Could not reach the server. The status is unchanged.');
+      setError(`${networkMessage(err)} The status is unchanged.`);
     } finally {
       setSaving(false);
     }

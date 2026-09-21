@@ -40,6 +40,10 @@ export const UpdateIntakeSchema = z.object({
   }),
 });
 
+// Past this the offset stops fitting in the 64-bit integer Prisma hands SQLite, and the
+// query throws instead of coming back empty.
+export const MAX_PAGE = 1_000_000;
+
 export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 50;
 
@@ -50,7 +54,7 @@ export const ListIntakesQuerySchema = z.object({
     .number()
     .int()
     .catch(1)
-    .transform((n) => Math.max(n, 1)),
+    .transform((n) => Math.min(Math.max(n, 1), MAX_PAGE)),
   pageSize: z.coerce
     .number()
     .int()

@@ -38,7 +38,6 @@ type IntakeRow = Prisma.IntakeGetPayload<{ select: typeof intakeSelect }>;
 
 export type SerializedIntake = ReturnType<typeof serializeIntake>;
 export type StatusCounts = Record<TriageStatus, number>;
-export type IntakeList = Awaited<ReturnType<typeof listIntakes>>;
 
 // The route handler and the list page both come through here, so the JSON and the rendered
 // page always agree about what page 2 contains.

@@ -30,7 +30,7 @@ export default async function IntakeListPage({ searchParams }: { searchParams: S
 
       {list.totalAll === 0 && <NoIntakesYet />}
 
-      {list.items.length === 0 && query.status && (
+      {list.totalAll > 0 && list.items.length === 0 && query.status && (
         <NoFilterMatches totalAll={list.totalAll} label={STATUS_LABELS[query.status]} />
       )}
 

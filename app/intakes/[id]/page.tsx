@@ -176,8 +176,10 @@ function RiskChecklist({ risks }: { risks: string[] }) {
 
   return (
     <ul className="space-y-2">
-      {risks.map((risk) => (
-        <li key={risk}>
+      {risks.map((risk, index) => (
+        // Keyed by position because applyGuardrails dedupes tags but not risks, so the same
+        // sentence can legitimately appear twice.
+        <li key={`${index}-${risk}`}>
           <label className="flex items-start gap-3 text-sm">
             <input
               type="checkbox"
@@ -221,21 +223,27 @@ function FailureBanner({ enrichment }: { enrichment: Enrichment }) {
   );
 }
 
-function Instrumentation({ enrichment }: { enrichment: Enrichment }) {
-  const attempts = enrichment.attempts > 0 && attemptCount(enrichment.attempts);
-  const parts =
-    enrichment.state === 'FAILED'
-      ? ['state: FAILED', attempts, enrichment.error]
-      : enrichment.source === 'FALLBACK'
-        ? ['source: fallback', attempts, enrichment.error && `last error: ${enrichment.error}`]
-        : [
-            enrichment.model,
-            enrichment.promptVersion && `prompt ${enrichment.promptVersion}`,
-            enrichment.latencyMs !== null && `${(enrichment.latencyMs / 1000).toFixed(1)}s`,
-            attempts,
-          ];
+// Separate returns rather than a nested ternary, so adding a field doesn't mean working out
+// which arm owns it.
+function instrumentationParts(e: Enrichment): (string | null)[] {
+  const attempts = e.attempts > 0 ? attemptCount(e.attempts) : null;
 
-  const line = parts.filter(Boolean).join(' · ');
+  if (e.state === 'FAILED') return ['state: FAILED', attempts, e.error];
+
+  if (e.source === 'FALLBACK') {
+    return ['source: fallback', attempts, e.error ? `last error: ${e.error}` : null];
+  }
+
+  return [
+    e.model,
+    e.promptVersion ? `prompt ${e.promptVersion}` : null,
+    e.latencyMs !== null ? `${(e.latencyMs / 1000).toFixed(1)}s` : null,
+    attempts,
+  ];
+}
+
+function Instrumentation({ enrichment }: { enrichment: Enrichment }) {
+  const line = instrumentationParts(enrichment).filter(Boolean).join(' · ');
   if (!line) return null;
 
   return (
